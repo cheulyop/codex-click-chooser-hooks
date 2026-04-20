@@ -44,6 +44,11 @@ class PolicyTextTests(unittest.TestCase):
         self.assertIn("Always provide a concise `rationale`", SYSTEM_PROMPT)
         self.assertIn("surface a meaningful next-step lane", SYSTEM_PROMPT)
         self.assertIn("do not choose `mode=\"end\"`", SYSTEM_PROMPT)
+        self.assertIn("`mode=\"end\"` is the strictest option", SYSTEM_PROMPT)
+        self.assertIn("Do not choose it just because the answer", SYSTEM_PROMPT)
+        self.assertIn("Would a useful collaborator naturally keep moving here?", SYSTEM_PROMPT)
+        self.assertIn("Use the shape of the current turn.", SYSTEM_PROMPT)
+        self.assertIn("older broad\ninstruction alone force another `mode=\"auto_continue\"`", SYSTEM_PROMPT)
 
         fallback = build_ask_user_block_reason({}, [])
         self.assertIn("Generate the chooser header, exactly one chooser question", fallback)

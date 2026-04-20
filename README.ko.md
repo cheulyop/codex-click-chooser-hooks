@@ -29,6 +29,7 @@ judge 모델은 최근 대화 맥락을 보고 `end` / `auto_continue` / `ask_us
 - 로컬 패키지 상태를 점검하는 `doctor`
 - 현재 judge endpoint에 실제 structured probe를 보내는 `doctor --live-judge`
 - follow-up decision 회귀를 위한 deterministic self-test
+- transcript 단위 judge calibration과 mode/rationale 점검용 `observe` CLI
 - 런타임 및 endpoint 구성을 설명하는 contract 문서
 - judge mode와 짧은 rationale을 기록하는 transcript debug event
 
@@ -40,6 +41,7 @@ judge 모델은 최근 대화 맥락을 보고 `end` / `auto_continue` / `ask_us
 - Python 인터프리터 및 repo root를 반영하는 template rendering
 - ask-user, auto-continue, end 동작에 대한 synthetic regression coverage
 - 로컬 환경용 install 및 runtime verification 명령
+- mode 비율, override, rationale 패턴을 보는 transcript 기반 observability
 
 ## 구조
 
@@ -59,6 +61,7 @@ codex-click-chooser-hooks/
 │     ├─ cli.py
 │     ├─ doctor.py
 │     ├─ install.py
+│     ├─ observe.py
 │     ├─ uninstall.py
 │     ├─ merge.py
 │     ├─ runtime_paths.py
@@ -82,6 +85,7 @@ PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli install --dry-run --json
 PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli doctor --json
 PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli doctor --live-judge --json
 PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli self-test --json
+PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli observe --json
 ```
 
 ## 설치
@@ -126,6 +130,30 @@ deterministic regression suite:
 PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli self-test --json
 ```
 
+이 repo 기준 최근 stop-hook 판단을 점검:
+
+```bash
+PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli observe --json
+```
+
+특정 과거 세션만 보기:
+
+```bash
+PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli observe --session-id 019da87f-2a7f-7870-a5aa-84a28745e9db --json
+```
+
+현재 세션과 archived 세션 전체를 함께 보기:
+
+```bash
+PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli observe --all-cwds --include-archived --json
+```
+
+특정 날짜 범위만 필터링:
+
+```bash
+PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli observe --all-cwds --date-from 2026-04-20 --date-to 2026-04-20 --json
+```
+
 ## 제거
 
 먼저 제거 결과를 미리 봅니다.
@@ -150,6 +178,8 @@ PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli uninstall --json
 - `doctor`: 정적 파일 및 패키지 상태 점검
 - `doctor --live-judge`: judge endpoint에 structured request를 보내 실제 응답 점검
 - `self-test`: deterministic synthetic regression suite 실행
+- `observe`: calibration용 `stop_hook_judgment` 이벤트 요약
+  - repo 범위/전체 범위, archived 세션 포함, 날짜 필터를 지원
 
 ## 런타임 구성
 

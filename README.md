@@ -28,6 +28,7 @@ The managed hooks are merged additively into `~/.codex/hooks.json`, and the
 - `doctor` checks for local package health
 - `doctor --live-judge` for a real structured probe against the configured judge endpoint
 - a deterministic self-test runner for follow-up decision regressions
+- an `observe` CLI for transcript-level judge calibration and mode/rationale inspection
 - a runtime contract for endpoint and environment configuration
 - transcript debug events that record the judge mode and short rationale
 
@@ -39,6 +40,7 @@ The managed hooks are merged additively into `~/.codex/hooks.json`, and the
 - template rendering for interpreter and repo-root aware hook commands
 - synthetic regression coverage for ask-user, auto-continue, and end behavior
 - install-time and runtime verification commands for local environments
+- transcript-based observability for mode mix, overrides, and rationale patterns
 
 ## Layout
 
@@ -55,6 +57,7 @@ codex-click-chooser-hooks/
 │     ├─ cli.py
 │     ├─ doctor.py
 │     ├─ install.py
+│     ├─ observe.py
 │     ├─ uninstall.py
 │     ├─ merge.py
 │     ├─ runtime_paths.py
@@ -78,6 +81,7 @@ PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli install --dry-run --json
 PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli doctor --json
 PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli doctor --live-judge --json
 PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli self-test --json
+PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli observe --json
 ```
 
 ## Install
@@ -122,6 +126,30 @@ Run the deterministic regression suite:
 PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli self-test --json
 ```
 
+Inspect recent stop-hook judgments for this repo:
+
+```bash
+PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli observe --json
+```
+
+Focus on one historical session:
+
+```bash
+PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli observe --session-id 019da87f-2a7f-7870-a5aa-84a28745e9db --json
+```
+
+Scan all current and archived Codex sessions:
+
+```bash
+PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli observe --all-cwds --include-archived --json
+```
+
+Filter calibration output to a date window:
+
+```bash
+PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli observe --all-cwds --date-from 2026-04-20 --date-to 2026-04-20 --json
+```
+
 ## Uninstall
 
 Preview the removal:
@@ -146,6 +174,8 @@ leaves unrelated hook configuration intact.
 - `doctor`: run static package and file checks
 - `doctor --live-judge`: probe the configured judge endpoint with a structured request
 - `self-test`: run the deterministic synthetic regression suite
+- `observe`: summarize recorded `stop_hook_judgment` events for calibration work
+  - supports repo-scoped or all-cwd scans, archived session inclusion, and date filtering
 
 ## Runtime Configuration
 

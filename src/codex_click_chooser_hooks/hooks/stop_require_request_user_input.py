@@ -30,6 +30,7 @@ STOP_SELECTION_TERMS = (
 )
 RECENT_TURNS_LIMIT = 6
 RECENT_CHOOSERS_LIMIT = 6
+CURRENT_TURN_MESSAGES_LIMIT = 3
 MAX_CONTEXT_TEXT_CHARS = 240
 FOLLOW_UP_CHOICE_PATTERNS = (
     re.compile(r"\boptions like\b", re.IGNORECASE),
@@ -79,6 +80,20 @@ Prefer `mode="end"` only when the assistant message is already a sufficient
 ending and does not itself surface a meaningful next-step lane. A narrow
 factual confirmation or tiny verification may end normally only when it does
 not offer, imply, or tee up a natural follow-up action or user choice.
+`mode="end"` is the strictest option. Do not choose it just because the answer
+is complete, explanatory, well-supported, or persuasive.
+
+If the assistant just resolved a blocker, explained a root cause, proposed a
+patch, summarized the current state, or finished a verification pass, assume
+there is often still a live follow-through lane. In those cases, prefer:
+- `mode="auto_continue"` when one concrete next action is the natural
+  continuation of the same lane.
+- `mode="ask_user"` when there are two or more concrete next lanes and the user
+  should pick among them.
+
+Choose `mode="end"` only when the work is actually done for now, or when any
+reasonable follow-up would be speculative, redundant, or clearly outside the
+current lane.
 
 If the assistant message explicitly surfaces next steps, follow-up options, or
 a "we can continue with..." style invitation, do not choose `mode="end"` for
@@ -91,9 +106,27 @@ Do not treat explanatory completeness by itself as a reason to ask the user. A
 well-explained answer may still call for `auto_continue` if the next step is
 obvious, or `end` if the task is simply done.
 
+When deciding between `mode="end"` and a continuation mode, ask yourself:
+"Would a useful collaborator naturally keep moving here?" If yes, do not pick
+`mode="end"`.
+
 Use the recent session context, not just the last assistant message. Pay
 special attention to recent `request_user_input` questions, the options that
 were already shown, and the user's selections or free-form answers.
+
+Use the shape of the current turn. The prompt may include multiple user and
+assistant messages from the same turn, including assistant sub-answers that
+already happened after the latest user message.
+
+If the latest user instruction is broad, such as "go ahead", "continue", or a
+general implementation request, and the assistant has already produced one or
+more substantive sub-answers after that message, do not let that older broad
+instruction alone force another `mode="auto_continue"`. In that situation,
+prefer `mode="auto_continue"` only when the latest assistant message still
+leaves one clearly dominant follow-through inside the same lane. If the old
+intent has already been substantially consumed and the next move is now a real
+choice, prefer `mode="ask_user"`. If the lane is genuinely complete, prefer
+`mode="end"`.
 
 If the same or substantially similar chooser was already shown recently and the
 conversation did not materially advance to a new state, prefer
@@ -198,6 +231,84 @@ def is_runtime_control_message(text: Optional[str]) -> bool:
     return stripped.startswith("<turn_aborted>") or stripped.startswith("<hook_prompt")
 
 
+def append_turn_message(turn: Dict[str, Any], role: str, text: str) -> None:
+    stripped = text.strip()
+    if not stripped:
+        return
+
+    timeline = turn.setdefault("timeline", [])
+    if timeline:
+        previous = timeline[-1]
+        if (
+            previous.get("role") == role
+            and normalize_compare_text(previous.get("text")) == normalize_compare_text(stripped)
+        ):
+            return
+
+    timeline.append({"role": role, "text": stripped})
+    if role == "user":
+        turn.setdefault("user_messages", []).append(stripped)
+    elif role == "assistant":
+        turn.setdefault("assistant_messages", []).append(stripped)
+
+
+def summarize_current_turn(turn: Dict[str, Any]) -> Dict[str, Any]:
+    timeline = turn.get("timeline", [])
+    user_messages = list(turn.get("user_messages", []))
+    assistant_messages = list(turn.get("assistant_messages", []))
+    assistant_messages_since_last_user: List[str] = []
+
+    last_user_index: Optional[int] = None
+    for index in range(len(timeline) - 1, -1, -1):
+        item = timeline[index]
+        if item.get("role") == "user":
+            last_user_index = index
+            break
+
+    if last_user_index is not None:
+        for item in timeline[last_user_index + 1 :]:
+            if item.get("role") == "assistant":
+                text = item.get("text")
+                if isinstance(text, str) and text.strip():
+                    assistant_messages_since_last_user.append(text.strip())
+
+    return {
+        "turn_id": turn.get("turn_id"),
+        "user_message_count": len(user_messages),
+        "assistant_message_count": len(assistant_messages),
+        "request_count": len(turn.get("requests", [])),
+        "recent_user_messages": user_messages[-CURRENT_TURN_MESSAGES_LIMIT:],
+        "recent_assistant_messages": assistant_messages[-CURRENT_TURN_MESSAGES_LIMIT:],
+        "assistant_messages_since_last_user": len(assistant_messages_since_last_user),
+        "assistant_messages_since_last_user_texts": assistant_messages_since_last_user[
+            -CURRENT_TURN_MESSAGES_LIMIT:
+        ],
+    }
+
+
+def prior_assistant_messages_before_final(
+    current_turn_context: Dict[str, Any], last_assistant_message: str
+) -> List[str]:
+    messages = []
+    for item in current_turn_context.get("assistant_messages_since_last_user_texts", []):
+        if isinstance(item, str) and item.strip():
+            messages.append(item.strip())
+
+    if not messages:
+        for item in current_turn_context.get("recent_assistant_messages", []):
+            if isinstance(item, str) and item.strip():
+                messages.append(item.strip())
+
+    normalized_final = normalize_compare_text(last_assistant_message)
+    if messages and normalized_final:
+        for index in range(len(messages) - 1, -1, -1):
+            if normalize_compare_text(messages[index]) == normalized_final:
+                del messages[index]
+                break
+
+    return messages[-CURRENT_TURN_MESSAGES_LIMIT:]
+
+
 def read_recent_session_context(
     transcript_path: str, turn_id: str
 ) -> Dict[str, Any]:
@@ -208,6 +319,7 @@ def read_recent_session_context(
             "recent_turns": [],
             "recent_choosers": [],
             "current_turn_requests": [],
+            "current_turn_context": {},
         }
 
     turns: List[Dict[str, Any]] = []
@@ -226,6 +338,7 @@ def read_recent_session_context(
             "user_messages": [],
             "assistant_messages": [],
             "requests": [],
+            "timeline": [],
         }
         turns.append(created)
         turn_by_id[current_turn_id] = created
@@ -255,7 +368,7 @@ def read_recent_session_context(
                     and message.strip()
                     and not is_runtime_control_message(message)
                 ):
-                    current_turn["user_messages"].append(message.strip())
+                    append_turn_message(current_turn, "user", message)
                 continue
 
             if item_type != "response_item":
@@ -267,9 +380,9 @@ def read_recent_session_context(
                 if text:
                     if role == "user":
                         if not is_runtime_control_message(text):
-                            current_turn["user_messages"].append(text)
+                            append_turn_message(current_turn, "user", text)
                     elif role == "assistant":
-                        current_turn["assistant_messages"].append(text)
+                        append_turn_message(current_turn, "assistant", text)
                 continue
 
             if (
@@ -310,6 +423,7 @@ def read_recent_session_context(
             "recent_turns": [],
             "recent_choosers": [],
             "current_turn_requests": [],
+            "current_turn_context": {},
         }
 
     recent_turns = turns[max(0, target_index - RECENT_TURNS_LIMIT + 1) : target_index + 1]
@@ -321,18 +435,21 @@ def read_recent_session_context(
 
     last_user_message: Optional[str] = None
     current_turn_requests: List[Dict[str, Any]] = []
+    current_turn_context: Dict[str, Any] = {}
     if recent_turns:
         current_turn_summary = recent_turns[-1]
         user_messages = current_turn_summary.get("user_messages", [])
         if user_messages:
             last_user_message = user_messages[-1]
         current_turn_requests = list(current_turn_summary.get("requests", []))
+        current_turn_context = summarize_current_turn(current_turn_summary)
 
     return {
         "last_user_message": last_user_message,
         "recent_turns": recent_turns,
         "recent_choosers": recent_choosers,
         "current_turn_requests": current_turn_requests,
+        "current_turn_context": current_turn_context,
     }
 
 
@@ -400,6 +517,7 @@ def judge_should_request(
     last_user_message: Optional[str],
     recent_turns: List[Dict[str, Any]],
     recent_choosers: List[Dict[str, Any]],
+    current_turn_context: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
     context_parts = ["Recent session context follows."]
     if recent_turns:
@@ -444,6 +562,49 @@ def judge_should_request(
                 "</last_user_message>",
             ]
         )
+    if current_turn_context:
+        context_parts.extend(["", "<current_turn_state>"])
+        context_parts.append(
+            "- user_message_count: "
+            f"{current_turn_context.get('user_message_count', 0)}"
+        )
+        context_parts.append(
+            "- assistant_message_count: "
+            f"{current_turn_context.get('assistant_message_count', 0)}"
+        )
+        context_parts.append(
+            "- request_user_input_count: "
+            f"{current_turn_context.get('request_count', 0)}"
+        )
+        context_parts.append(
+            "- assistant_messages_since_last_user: "
+            f"{current_turn_context.get('assistant_messages_since_last_user', 0)}"
+        )
+        context_parts.append("</current_turn_state>")
+
+        current_turn_user_messages = [
+            compact_text(message, 200)
+            for message in current_turn_context.get("recent_user_messages", [])
+            if compact_text(message, 200)
+        ]
+        if current_turn_user_messages:
+            context_parts.extend(["", "<current_turn_user_messages>"])
+            for message in current_turn_user_messages:
+                context_parts.append(f"- user: {message}")
+            context_parts.append("</current_turn_user_messages>")
+
+        prior_assistant_messages = [
+            compact_text(message, 200)
+            for message in prior_assistant_messages_before_final(
+                current_turn_context, last_assistant_message
+            )
+            if compact_text(message, 200)
+        ]
+        if prior_assistant_messages:
+            context_parts.extend(["", "<current_turn_assistant_history_before_final>"])
+            for message in prior_assistant_messages:
+                context_parts.append(f"- assistant: {message}")
+            context_parts.append("</current_turn_assistant_history_before_final>")
     if recent_choosers:
         context_parts.extend(["", "<recent_chooser_summary>"])
         for chooser in recent_choosers[-3:]:
@@ -639,6 +800,45 @@ def apply_end_mode_overrides(
     return judgment, None
 
 
+def build_debug_current_turn_context(payload: Dict[str, Any]) -> Dict[str, Any]:
+    context = payload.get("_current_turn_context")
+    if not isinstance(context, dict) or not context:
+        return {}
+
+    summary: Dict[str, Any] = {
+        "user_message_count": context.get("user_message_count", 0),
+        "assistant_message_count": context.get("assistant_message_count", 0),
+        "request_count": context.get("request_count", 0),
+        "assistant_messages_since_last_user": context.get(
+            "assistant_messages_since_last_user", 0
+        ),
+    }
+
+    recent_user_messages = [
+        compact_text(message, 160)
+        for message in context.get("recent_user_messages", [])
+        if compact_text(message, 160)
+    ]
+    if recent_user_messages:
+        summary["recent_user_messages"] = recent_user_messages
+
+    last_assistant_message = payload.get("last_assistant_message")
+    if isinstance(last_assistant_message, str) and last_assistant_message.strip():
+        prior_assistant_messages = [
+            compact_text(message, 160)
+            for message in prior_assistant_messages_before_final(
+                context, last_assistant_message
+            )
+            if compact_text(message, 160)
+        ]
+        if prior_assistant_messages:
+            summary["prior_assistant_messages_before_final"] = (
+                prior_assistant_messages
+            )
+
+    return summary
+
+
 def build_stop_hook_debug_payload(
     payload: Dict[str, Any],
     *,
@@ -680,6 +880,10 @@ def build_stop_hook_debug_payload(
 
     if isinstance(judgment_override, dict):
         debug_payload["judgment_override"] = judgment_override
+
+    current_turn_context = build_debug_current_turn_context(payload)
+    if current_turn_context:
+        debug_payload["current_turn_context"] = current_turn_context
 
     return debug_payload
 
@@ -827,12 +1031,16 @@ def should_continue(payload: Dict[str, Any]) -> bool:
     recent_turns: List[Dict[str, Any]] = []
     recent_choosers: List[Dict[str, Any]] = []
     current_turn_requests: List[Dict[str, Any]] = []
+    current_turn_context: Dict[str, Any] = {}
     if isinstance(transcript_path, str) and isinstance(turn_id, str):
         context = read_recent_session_context(transcript_path, turn_id)
         last_user_message = context.get("last_user_message")
         recent_turns = context.get("recent_turns", [])
         recent_choosers = context.get("recent_choosers", [])
         current_turn_requests = context.get("current_turn_requests", [])
+        current_turn_context = context.get("current_turn_context", {})
+    if current_turn_context:
+        payload["_current_turn_context"] = current_turn_context
     if latest_answer_is_explicit_stop(current_turn_requests):
         payload["_stop_hook_debug"] = build_stop_hook_debug_payload(
             payload,
@@ -845,6 +1053,7 @@ def should_continue(payload: Dict[str, Any]) -> bool:
         last_user_message,
         recent_turns,
         recent_choosers,
+        current_turn_context,
     )
     if raw_judgment is None:
         payload["_stop_hook_debug"] = build_stop_hook_debug_payload(

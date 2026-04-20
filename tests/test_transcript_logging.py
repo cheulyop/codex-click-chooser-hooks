@@ -35,10 +35,14 @@ class TranscriptLoggingTests(unittest.TestCase):
         last_assistant_message: str = (
             "The install is already current and the latest session policy was loaded."
         ),
+        transcript_lines: list[str] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         with tempfile.TemporaryDirectory() as temp_dir:
             transcript_path = Path(temp_dir) / "transcript.jsonl"
-            transcript_path.touch()
+            if transcript_lines:
+                transcript_path.write_text("\n".join(transcript_lines) + "\n")
+            else:
+                transcript_path.touch()
             payload = {
                 "turn_id": "turn-logging",
                 "transcript_path": str(transcript_path),
@@ -143,6 +147,71 @@ class TranscriptLoggingTests(unittest.TestCase):
         self.assertIn(
             "inspect a few mode_end rationales before weakening the end wording",
             event["payload"]["continue_instruction"],
+        )
+
+    def test_main_logs_current_turn_context_summary(self) -> None:
+        transcript_lines = [
+            json.dumps({"type": "turn_context", "payload": {"turn_id": "turn-logging"}}),
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "Go ahead and keep moving."}
+                        ],
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [
+                            {"type": "output_text", "text": "I checked the launcher path first."}
+                        ],
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "The config flag is still missing in the current runtime path.",
+                            }
+                        ],
+                    },
+                }
+            ),
+        ]
+        _, event = self.run_main_with_judgment(
+            {
+                "mode": "end",
+                "continue_instruction": "",
+                "rationale": "The explanation already covered the current question.",
+            },
+            last_assistant_message=(
+                "The config flag is still missing in the current runtime path."
+            ),
+            transcript_lines=transcript_lines,
+        )
+
+        context = event["payload"]["current_turn_context"]
+        self.assertEqual(context["user_message_count"], 1)
+        self.assertEqual(context["assistant_message_count"], 2)
+        self.assertEqual(context["assistant_messages_since_last_user"], 2)
+        self.assertEqual(context["request_count"], 0)
+        self.assertEqual(
+            context["prior_assistant_messages_before_final"],
+            ["i checked the launcher path first."],
         )
 
 

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .doctor import run_doctor
 from .install import run_install
+from .observe import run_observe
 from .selftest import run_selftest
 from .uninstall import run_uninstall
 
@@ -33,6 +34,19 @@ def build_parser() -> argparse.ArgumentParser:
     selftest.add_argument("--json", action="store_true")
     selftest.add_argument("--case", type=Path)
 
+    observe = sub.add_parser("observe")
+    observe.add_argument("--json", action="store_true")
+    observe.add_argument("--sessions-root", type=Path)
+    observe.add_argument("--archived-sessions-root", type=Path)
+    observe.add_argument("--include-archived", action="store_true")
+    observe.add_argument("--cwd", type=Path)
+    observe.add_argument("--all-cwds", action="store_true")
+    observe.add_argument("--session-id")
+    observe.add_argument("--mode", choices=["end", "auto_continue", "ask_user"])
+    observe.add_argument("--date-from")
+    observe.add_argument("--date-to")
+    observe.add_argument("--limit", type=int, default=8)
+
     layout = sub.add_parser("print-layout")
     layout.add_argument("--json", action="store_true")
     return parser
@@ -57,6 +71,19 @@ def main() -> int:
         )
     elif args.command == "self-test":
         report = run_selftest(args.case)
+    elif args.command == "observe":
+        report = run_observe(
+            sessions_root=args.sessions_root,
+            archived_sessions_root=args.archived_sessions_root,
+            include_archived=args.include_archived,
+            cwd=args.cwd,
+            all_cwds=args.all_cwds,
+            session_id=args.session_id,
+            mode=args.mode,
+            date_from=args.date_from,
+            date_to=args.date_to,
+            limit=args.limit,
+        )
     else:
         report = {
             "repo": "codex-click-chooser-hooks",
@@ -65,6 +92,7 @@ def main() -> int:
                 "src/codex_click_chooser_hooks/uninstall.py",
                 "src/codex_click_chooser_hooks/merge.py",
                 "src/codex_click_chooser_hooks/runtime_paths.py",
+                "src/codex_click_chooser_hooks/observe.py",
                 "src/codex_click_chooser_hooks/hooks",
                 "src/codex_click_chooser_hooks/templates",
                 "tests/fixtures",
