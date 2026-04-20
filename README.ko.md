@@ -22,6 +22,273 @@ judge 모델은 최근 대화 맥락을 보고 `end` / `auto_continue` / `ask_us
 이 hook들은 `~/.codex/hooks.json`에 additive 방식으로 병합되며,
 `uninstall`은 이 패키지가 관리하는 항목만 제거합니다.
 
+## 동작 방식
+
+1. `SessionStart`가 startup 과 resume 시점에 실행되어 chooser policy를
+   Codex 세션에 로드합니다.
+2. 턴이 끝나기 직전에 `Stop` hook 이 실행됩니다.
+3. `Stop` hook 은 transcript에서 최근 turn 기록을 다시 구성합니다. 여기서
+   `turn`은 `turn_id`를 기준으로 묶인 하나의 재구성된 대화 단위입니다. 각
+   turn에 대해 `user_messages`, `assistant_messages`, `requests`,
+   `timeline`을 추적합니다.
+4. 현재 turn에 대해서는 전체 transcript를 그대로 보내지 않고 compact한
+   summary를 만듭니다.
+   - 최근 turn window: 최대 `6`개 turn
+   - chooser history window: 최대 `6`개 chooser
+   - current-turn timeline window: 최대 `12`개 timeline item
+     여기서 각 item은 그 turn timeline 안의 user 또는 assistant message
+     하나를 뜻합니다
+   - assistant message count, chooser count 같은 coarse turn-shape 카운트
+5. 이 compact prompt를 judge 모델로 보냅니다.
+6. judge는 세 가지 structured mode 중 하나를 반환합니다.
+   - `end`: assistant 응답을 정상 종료
+   - `auto_continue`: 사용자에게 묻지 않고 같은 턴에서 계속 진행
+   - `ask_user`: 멈춘 뒤 Codex가 실제 후속 chooser를 제시
+7. 메인 Codex 세션은 그 결과를 실제로 수행합니다.
+   - `end`: 턴이 그대로 종료됩니다
+   - `auto_continue`: continue instruction을 받아 같은 턴에서 계속 움직입니다
+   - `ask_user`: live session context를 바탕으로 실제 `request_user_input`
+     질문과 옵션을 생성합니다
+8. 이후 transcript에는 `stop_hook_judgment` debug event가 추가되어,
+   나중에 `observe`로 실제 판단을 다시 볼 수 있습니다.
+
+judge 모델은 mode, rationale, optional `continue_instruction`만 결정합니다.
+실제 chooser 문항은 judge가 아니라 메인 Codex 세션이 작성합니다.
+
+## Judge Endpoint
+
+judge 쪽에는 다음이 필요합니다.
+
+- OpenAI-compatible `responses` endpoint
+- hook schema에 맞는 structured JSON output
+- hook timeout 안에 응답을 돌려줄 수 있는 latency
+- `mode`, `continue_instruction`, `rationale`를 반환할 수 있는 백엔드
+
+기본 judge 설정:
+
+- endpoint: `http://127.0.0.1:10531/v1/responses`
+- model: `gpt-5.4`
+- reasoning effort: `medium`
+- timeout: `30`초
+
+다음 환경 변수로 바꿀 수 있습니다.
+
+- `CODEX_RUI_JUDGE_URL`
+- `CODEX_RUI_JUDGE_MODEL`
+- `CODEX_RUI_JUDGE_REASONING_EFFORT`
+- `CODEX_RUI_JUDGE_TIMEOUT_SECONDS`
+
+전체 런타임 contract는 [docs/runtime-contract.md](docs/runtime-contract.md)를
+보세요.
+
+## Judge가 보는 입력
+
+Stop hook은 raw transcript 전체를 그대로 judge에 보내지 않습니다. 현재
+작업 lane을 반영하는 compact text prompt를 보냅니다.
+
+현재 turn 요약은 대략 이런 순서로 만들어집니다.
+
+1. transcript에서 최근 turn들을 다시 구성합니다
+2. 현재 turn의 user / assistant message를 수집합니다
+3. assistant message count, chooser count 같은 coarse turn-shape 카운트를 계산합니다
+4. 최신 user message 이후의 timeline을 current-turn 핵심 블록으로 유지합니다
+5. 최근 chooser history를 별도 블록으로 붙여서, 이미 무엇을 보여줬고 어떤 응답이 있었는지 judge가 볼 수 있게 합니다
+
+현재 prompt 형태는 대략 이렇습니다.
+
+```text
+Recent session context follows.
+
+<recent_session_context>
+<turn id="...">
+<last_user_message>
+...
+</last_user_message>
+</turn>
+</recent_session_context>
+
+<current_turn_state>
+- user_message_count: ...
+- assistant_message_count: ...
+- request_user_input_count: ...
+- assistant_messages_since_last_user: ...
+</current_turn_state>
+
+<current_turn_timeline_since_last_user>
+- user|assistant: ...
+</current_turn_timeline_since_last_user>
+
+<recent_chooser_summary>
+- question: ...
+  options: ...
+  user_answer: ...
+</recent_chooser_summary>
+
+<assistant_final_message>
+...
+</assistant_final_message>
+```
+
+실제로는 judge가 다음 정보를 봅니다.
+
+- 최근 turn 단위의 사용자 질문 흐름
+- 현재 turn 안에서 assistant가 이미 얼마나 많이 진행했는지
+- 최신 user message 이후의 current-turn timeline
+- 최근 chooser 질문, 옵션, 사용자 응답
+- 지금 막 끝나려는 final assistant message
+
+예전 revision보다 현재 prompt가 더 좁고 단순한 이유는, 이미 중복 projection을
+여럿 제거했기 때문입니다.
+
+- top-level duplicate `last_user_message`
+- `current_turn_user_messages`
+- `current_turn_assistant_history_before_final`
+- `current_turn_recent_timeline`
+- turn-local `request_user_input_history`
+
+## Judge가 반환하는 값
+
+judge는 다음 schema에 맞는 structured JSON을 반환합니다.
+
+```json
+{
+  "mode": "end | auto_continue | ask_user",
+  "continue_instruction": "string",
+  "rationale": "string"
+}
+```
+
+mode별 기대 동작:
+
+- `end`: `continue_instruction`은 보통 비어 있습니다
+- `auto_continue`: `continue_instruction`이 반드시 비어 있지 않아야 합니다
+- `ask_user`: 실제 chooser는 Codex가 생성하므로 `continue_instruction`은 비어 있을 수 있습니다
+
+예시:
+
+```json
+{
+  "mode": "end",
+  "continue_instruction": "",
+  "rationale": "The reply already closes the current lane and does not tee up a meaningful next step."
+}
+```
+
+```json
+{
+  "mode": "auto_continue",
+  "continue_instruction": "Update the stop-hook schema to use mode=end|auto_continue|ask_user, then split the branch handling for ask_user and auto_continue.",
+  "rationale": "The user already chose the implementation lane and one next action is clearly dominant."
+}
+```
+
+```json
+{
+  "mode": "ask_user",
+  "continue_instruction": "",
+  "rationale": "Two materially different next paths are open and the user should pick between them."
+}
+```
+
+## 사용자에게는 어떻게 보이나요
+
+UI 수준에서는 대체로 이렇게 느껴집니다.
+
+- 턴이 진짜 끝난 경우에는 그냥 정상 종료됩니다
+- 다음 행동이 하나로 명확하면 클릭을 요구하지 않고 그대로 계속 진행합니다
+- 실제로 선택이 필요할 때만 chooser를 띄우고, 선택 후에도 같은 턴에서 이어서 진행합니다
+
+좀 더 구체적인 예시:
+
+- 작은 사실 확인:
+  - user asks: `Does the hook template still point at the packaged script?`
+  - assistant ends with: `Confirmed. The hook template still points at the packaged stop-hook script.`
+  - expected mode: `end`
+- 명확한 후속 진행:
+  - assistant ends with: `The patch is in. The next step is to run the verification command.`
+  - expected mode: `auto_continue`
+  - expected output shape:
+
+    ```json
+    {
+      "mode": "auto_continue",
+      "continue_instruction": "Run the verification command next.",
+      "rationale": "One dominant follow-through step is already clear."
+    }
+    ```
+- 실제 분기 선택:
+  - assistant ends with: `We can either inspect more mode_end cases or tighten the prompt wording.`
+  - expected mode: `ask_user`
+  - 이후 Codex가 같은 턴에서 실제 chooser를 생성합니다
+
+## Stop hook 분기 처리
+
+judge가 응답을 반환한 뒤 stop hook은 그것을 두 종류의 block instruction
+중 하나로 바꾸거나, 그대로 종료시킵니다.
+
+- `build_auto_continue_block_reason(...)`는 사용자에게 다시 묻지 말고,
+  바로 continue instruction을 수행하라고 Codex에 지시합니다
+- `build_ask_user_block_reason(...)`는 `request_user_input`를 호출하고,
+  session context를 바탕으로 chooser를 생성하라고 지시합니다
+- `end`는 별도 block reason 없이 턴을 그대로 닫습니다
+
+judge 뒤에는 safety layer도 하나 있습니다.
+
+- raw judge response가 `end`였더라도 assistant message 자체가 follow-up choice를
+  여러 개 명확히 드러내면 `ask_user`로 승격할 수 있습니다
+- raw judge response가 `end`였더라도 assistant message 자체가 하나의 next step을
+  명확히 이름 붙이면 `auto_continue`로 승격할 수 있습니다
+
+이 safety layer는 너무 이른 `end`를 잡아내기 위한 장치입니다.
+
+여기서 "clearly"는 다른 LLM 호출로 판단하는 게 아닙니다. 현재 구현은 final
+assistant message에 대해 lightweight message-pattern check를 수행합니다.
+예를 들어:
+
+- follow-up choice patterns: `we can either`, `options like`, `or we can`,
+  `아니면`, `또는`
+- next-step patterns: `the next step is to ...`, `the obvious next step is to ...`,
+  `다음 단계는 ...`, `다음으로는 ...`
+
+즉 이건 좁은 heuristic backstop입니다. judge가 명백히 너무 이른 `end`를
+반환했을 때는 유용하지만, 완전한 semantic parser는 아닙니다.
+
+## 관측성과 디버깅
+
+각 stop-hook 판단은 transcript에 다음 같은 필드를 가진 debug event를 남깁니다.
+
+- `status`
+- `mode`
+- `rationale`
+- `continue_instruction`
+- `judgment_override`
+- `judge_failure_reason`
+- `current_turn_context`
+
+이 데이터는 calibration 작업에 유용한 `observe` CLI로 이어집니다.
+
+```bash
+PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli observe --json
+```
+
+judge endpoint가 unavailable이거나 malformed structured output을 반환하면,
+hook은 `status="judge_unavailable"`과 best-effort `judge_failure_reason`을
+남기고, 기본적으로 turn을 정상 종료시키는 쪽으로 fallback합니다.
+
+이 hook은 결국 LLM judge 기반이기 때문에, 처음부터 모든 사용자의 기대에
+완벽히 맞지는 않을 수 있습니다. 그래서 이 repo는 동작을 직접 관찰하고
+customize하기 쉽게 만드는 쪽을 의도합니다.
+
+- `observe`로 실제 transcript-level 판단을 다시 볼 수 있습니다
+- transcript debug event가 rationale, mode, override, turn-shape 데이터를 남깁니다
+- judge prompt는 로컬 코드
+  `src/codex_click_chooser_hooks/hooks/stop_require_request_user_input.py`
+  에 있습니다
+- post-judge override heuristic도 로컬에서 직접 수정할 수 있습니다
+
+권장 workflow는 이렇습니다: 실제 결과를 보고, prompt나 heuristic을 수정한 뒤,
+`self-test`, `doctor`, `observe`를 다시 돌립니다.
+
 ## 포함 내용
 
 - 패키지에 포함된 `Stop` / `SessionStart` hook 스크립트

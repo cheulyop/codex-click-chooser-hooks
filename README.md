@@ -26,14 +26,16 @@ The managed hooks are merged additively into `~/.codex/hooks.json`, and the
 1. `SessionStart` runs on startup and resume and loads the chooser policy into
    the Codex session.
 2. `Stop` runs when a turn is about to end.
-3. The `Stop` hook rebuilds recent turn history from the transcript. For each
-   turn, it tracks `user_messages`, `assistant_messages`, `requests`, and a
-   simple `timeline`.
+3. The `Stop` hook rebuilds recent turn history from the transcript. Here, a
+   `turn` is one reconstructed conversation unit keyed by `turn_id`. For each
+   turn, the hook tracks `user_messages`, `assistant_messages`, `requests`,
+   and a simple `timeline`.
 4. For the current turn, it derives a compact summary instead of shipping the
    whole transcript:
    - recent turn window: up to `6` turns
    - chooser history window: up to `6` recent choosers
-   - current-turn timeline window: up to `12` timeline items
+   - current-turn timeline window: up to `12` timeline items, where each
+     item is one user or assistant message entry inside the turn timeline
    - current-turn counts such as assistant message count and chooser count
 5. The hook sends that compact prompt to a judge model.
 6. The judge returns one of three structured modes:
