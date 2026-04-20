@@ -5,7 +5,7 @@
 번역 문서는 영어 원본보다 늦게 업데이트될 수 있습니다.
 
 대화를 마무리할 때 적절한 방식으로 끝나도록 돕는 Codex hook 모음입니다.
-정상 종료할지, 같은 턴에서 자동으로 이어갈지, 아니면 짧은 후속 질문을
+정상 종료할지, 같은 턴에서 자동으로 이어갈지, 아니면 짧은 다음 단계 질문을
 한 번 더 할지를 판단합니다.
 
 ## 무엇을 하나요
@@ -14,10 +14,10 @@
 
 - 시작 또는 resume 시, 같은 턴에서 자연스럽게 이어갈지에 대한 기본 원칙을
   불러오는 `SessionStart` hook
-- 마무리 응답을 정상 종료할지, 같은 턴에서 자동으로 이어갈지, 짧은 후속 질문을 던질지 결정하는 `Stop` hook
+- 마무리 응답을 정상 종료할지, 같은 턴에서 자동으로 이어갈지, 짧은 다음 단계 질문을 던질지 결정하는 `Stop` hook
 
 judge 모델은 최근 대화 맥락을 보고 `end` / `auto_continue` / `ask_user`
-모드를 고릅니다. `ask_user`가 필요하면 Codex가 실제 후속 질문과 옵션을
+모드를 고릅니다. `ask_user`가 필요하면 Codex가 실제 다음 단계 질문과 옵션을
 현재 세션 맥락에 맞게 생성합니다.
 
 이 패키지가 추가하는 hook 항목들은 `~/.codex/hooks.json`에 additive
@@ -29,12 +29,12 @@ judge 모델은 최근 대화 맥락을 보고 `end` / `auto_continue` / `ask_us
    - clear next step이 하나이면 같은 턴에서 바로 이어서 진행
    - 실제로 선택이 필요할 때만 한 번 질문
 2. 턴이 끝나기 직전에 `Stop` hook이 실행됩니다.
-3. `Stop` hook은 최근 대화 흐름, 최근 후속 질문 내역, 막 끝나려는 assistant
+3. `Stop` hook은 최근 대화 흐름, 최근 다음 단계 질문 내역, 막 끝나려는 assistant
    응답을 모아 judge 모델에 보냅니다.
 4. judge는 세 가지 structured mode 중 하나를 반환합니다.
    - `end`: assistant 응답을 정상 종료
    - `auto_continue`: 사용자에게 묻지 않고 같은 턴에서 계속 진행
-   - `ask_user`: 멈춘 뒤 Codex가 실제 후속 질문을 제시
+   - `ask_user`: 멈춘 뒤 Codex가 실제 다음 단계 질문을 제시
 5. 메인 Codex 세션은 그 결과를 실제로 수행합니다.
    - `end`: 턴이 그대로 종료됩니다
    - `auto_continue`: continue instruction을 받아 같은 턴에서 계속 움직입니다
@@ -43,7 +43,7 @@ judge 모델은 최근 대화 맥락을 보고 `end` / `auto_continue` / `ask_us
 6. 이후 transcript에는 `stop_hook_judgment` debug event가 추가되어,
    나중에 `observe`로 실제 판단을 다시 볼 수 있습니다.
 
-judge는 세 가지 결과 중 하나와 짧은 이유를 돌려줍니다. 실제 후속 질문은
+judge는 세 가지 결과 중 하나와 짧은 이유를 돌려줍니다. 실제 다음 단계 질문은
 judge가 아니라 메인 Codex 세션이 작성합니다.
 
 예를 들면 이렇게 동작합니다.
@@ -52,7 +52,7 @@ judge가 아니라 메인 Codex 세션이 작성합니다.
 - assistant가 `패치는 반영됐고 다음 단계는 self-test 실행입니다.`로 끝나면
   보통 같은 턴에서 계속 진행합니다
 - assistant가 `프롬프트를 다듬을지, observe를 먼저 볼지 정해야 합니다.`처럼
-  두 갈래를 열면 보통 후속 질문을 한 번 띄웁니다
+  두 갈래를 열면 보통 다음 단계 질문을 한 번 띄웁니다
 
 ## Judge Endpoint
 
@@ -94,7 +94,7 @@ Stop hook은 raw transcript 전체를 그대로 보내지 않고, 현재 작업 
 judge가 주로 참고하는 것은 다음 네 가지입니다.
 
 - 최근 몇 턴의 대화 흐름
-- 최근 후속 질문과 사용자의 선택
+- 최근 다음 단계 질문과 사용자의 선택
 - 현재 턴에서 assistant가 이미 얼마나 진행했는지
 - 지금 막 끝나려는 마지막 assistant 응답
 
@@ -104,7 +104,7 @@ judge가 주로 참고하는 것은 다음 네 가지입니다.
 최근 흐름:
 - user: README 설명을 더 간단하게 정리해 주세요
 - assistant: README 수정과 검증을 마쳤습니다
-- 최근 후속 질문: "다음엔 무엇을 할까요?" -> "검증 후 커밋"
+- 최근 다음 단계 질문: "다음엔 무엇을 할까요?" -> "검증 후 커밋"
 - final assistant message: "검증은 끝났습니다. 이제 커밋할 수 있습니다."
 ```
 
@@ -128,7 +128,7 @@ mode별 기대 동작:
 
 - `end`: `continue_instruction`은 보통 비어 있습니다
 - `auto_continue`: `continue_instruction`이 반드시 비어 있지 않아야 합니다
-- `ask_user`: 실제 후속 질문은 Codex가 생성하므로 `continue_instruction`은 비어 있을 수 있습니다
+- `ask_user`: 실제 다음 단계 질문은 Codex가 생성하므로 `continue_instruction`은 비어 있을 수 있습니다
 
 예시:
 
@@ -162,7 +162,7 @@ UI 수준에서는 대체로 이렇게 느껴집니다.
 
 - 턴이 진짜 끝난 경우에는 그냥 정상 종료됩니다
 - 다음 행동이 하나로 명확하면 클릭을 요구하지 않고 그대로 계속 진행합니다
-- 실제로 선택이 필요할 때만 후속 질문을 띄우고, 선택 후에도 같은 턴에서 이어서 진행합니다
+- 실제로 선택이 필요할 때만 다음 단계 질문을 띄우고, 선택 후에도 같은 턴에서 이어서 진행합니다
 
 좀 더 구체적인 예시:
 
@@ -185,7 +185,7 @@ UI 수준에서는 대체로 이렇게 느껴집니다.
 - 실제 분기 선택:
   - assistant ends with: `We can either inspect more mode_end cases or tighten the prompt wording.`
   - expected mode: `ask_user`
-  - 이후 Codex가 같은 턴에서 실제 후속 질문을 생성합니다
+  - 이후 Codex가 같은 턴에서 실제 다음 단계 질문을 생성합니다
 
 ## Stop hook 분기 처리
 
@@ -195,7 +195,7 @@ judge가 응답을 반환한 뒤 stop hook은 그것을 두 종류의 block inst
 - `build_auto_continue_block_reason(...)`는 사용자에게 다시 묻지 말고,
   바로 continue instruction을 수행하라고 Codex에 지시합니다
 - `build_ask_user_block_reason(...)`는 `request_user_input`를 호출하고,
-  session context를 바탕으로 후속 질문을 생성하라고 지시합니다
+  session context를 바탕으로 다음 단계 질문을 생성하라고 지시합니다
 - `end`는 별도 block reason 없이 턴을 그대로 닫습니다
 
 judge 뒤에는 safety layer도 하나 있습니다.
@@ -261,7 +261,7 @@ customize하기 쉽게 만드는 쪽을 의도합니다.
 - `hooks.json`용 additive `install` / `uninstall` 명령
 - 로컬 패키지 상태를 점검하는 `doctor`
 - 현재 judge endpoint에 실제 structured probe를 보내는 `doctor --live-judge`
-- follow-up decision 회귀를 위한 deterministic self-test
+- next-step decision 회귀를 위한 deterministic self-test
 - transcript 단위 judge calibration과 mode/rationale 점검용 `observe` CLI
 - repo 핵심 경로를 빠르게 확인하는 `print-layout` CLI
 - 런타임 및 endpoint 구성을 설명하는 contract 문서

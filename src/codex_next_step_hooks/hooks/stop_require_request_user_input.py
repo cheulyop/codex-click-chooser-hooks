@@ -59,11 +59,11 @@ Decide among exactly three modes:
 - `mode="auto_continue"`: stop the closeout and tell Codex to continue in the
   same turn without asking the user.
 - `mode="ask_user"`: stop the closeout because user input is genuinely needed.
-  Codex will generate the actual `request_user_input` question and options in
+  Codex will generate the actual `request_user_input` next-step question and options in
   the same turn.
 
 Your main goal is useful progress with minimal friction. Do NOT ask the user
-just because an extra follow-up question would be convenient.
+just because an extra next-step question would be convenient.
 
 Prefer `mode="auto_continue"` when there is one clearly dominant next action
 that is already implied by the user's direction and does not depend on an
@@ -129,12 +129,12 @@ intent has already been substantially consumed and the next move is now a real
 choice, prefer `mode="ask_user"`. If the lane is genuinely complete, prefer
 `mode="end"`.
 
-If the same or substantially similar follow-up question was already shown recently and the
+If the same or substantially similar next-step question was already shown recently and the
 conversation did not materially advance to a new state, prefer
 `mode="end"` or `mode="auto_continue"` instead of repeating that question. Avoid
 re-asking it within the same continued turn after the user already answered it.
 
-If the user answered a follow-up question with a free-form instruction, complaint, or
+If the user answered a next-step question with a free-form instruction, complaint, or
 course correction, treat that as real intent to act on rather than as a reason
 to ask the same question again.
 
@@ -144,7 +144,7 @@ that lane if `mode="ask_user"` is still necessary. Otherwise prefer
 `mode="auto_continue"` and keep moving.
 
 When using `mode="ask_user"`, you are only deciding that user input is needed.
-Do not try to author the follow-up question itself. Codex will generate the
+Do not try to author the next-step question itself. Codex will generate the
 actual question and options from the recent session context.
 
 When using `mode="auto_continue"`, provide a concise `continue_instruction`
@@ -741,7 +741,7 @@ def judge_should_request(
             "",
             "Decide whether the assistant should end, auto-continue in the same "
             "turn without asking the user, or ask the user one "
-            "`request_user_input` follow-up question.",
+            "`request_user_input` next-step question.",
         ]
     )
 
@@ -1050,7 +1050,7 @@ def append_stop_hook_debug_event(payload: Dict[str, Any]) -> None:
 def render_recent_question_history(recent_questions: List[Dict[str, Any]]) -> str:
     if not recent_questions:
         return ""
-    lines = ["Recent follow-up question history:"]
+    lines = ["Recent next-step question history:"]
     for question_request in recent_questions[-3:]:
         question = compact_render_text(question_request.get("question"), 200)
         if question:
@@ -1074,14 +1074,14 @@ def build_ask_user_block_reason(
     del judgment
     recent_history_block = render_recent_question_history(recent_questions)
     anti_repeat_instruction = (
-        "Do not ask the same or substantially similar follow-up question again if the recent "
+        "Do not ask the same or substantially similar next-step question again if the recent "
         "history already offered it. Treat free-form answers as new user intent to "
         "act on, not as a cue to re-ask the same question."
     )
     parts = [
         "Use the `request_user_input` tool now. Do not send another prose or bullet-list "
         "answer.",
-        "Generate the header, exactly one follow-up question, and the natural "
+        "Generate the header, exactly one next-step question, and the natural "
         "single-select options yourself from the recent session context and the "
         "assistant message that just ended, then wait for the user's selection.",
     ]
@@ -1092,7 +1092,7 @@ def build_ask_user_block_reason(
             "",
             anti_repeat_instruction,
             "",
-            "The follow-up question should feel like a natural continuation of the "
+            "The next-step question should feel like a natural continuation of the "
             "just-finished answer, not a reset-style menu. Use options that materially move the work "
             "forward, and combine actions when that is the most natural single choice.",
             "",
@@ -1113,7 +1113,7 @@ def build_auto_continue_block_reason(
     instruction = normalize_continue_instruction(judgment)
     recent_history_block = render_recent_question_history(recent_questions)
     parts = [
-        "Do not ask the user another follow-up question here.",
+        "Do not ask the user another next-step question here.",
         "The next step is clear enough to continue in the same turn without "
         "waiting for user input.",
         "",

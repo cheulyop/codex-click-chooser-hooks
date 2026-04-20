@@ -5,7 +5,7 @@
 翻訳版は英語版より更新が遅れることがあります。
 
 会話を締めるときに、適切な形で終わるように支援する Codex hook 集です。
-そのまま終えるか、同じターンで自動的に続けるか、短いフォローアップ質問を
+そのまま終えるか、同じターンで自動的に続けるか、短い次のステップ質問を
 1 回だけ出すかを判断します。
 
 ## できること
@@ -13,11 +13,11 @@
 このパッケージは 2 つの managed Codex hook をインストールします。
 
 - 起動時と resume 時に next-step policy を読み込む `SessionStart` hook
-- closeout を通常終了するか、同じターンで自動継続するか、短いフォローアップ質問を出すか決める `Stop` hook
+- closeout を通常終了するか、同じターンで自動継続するか、短い次のステップ質問を出すか決める `Stop` hook
 
 judge モデルは最近の会話コンテキストを見て `end` / `auto_continue` /
 `ask_user` モードを選びます。`ask_user` が必要な場合は、Codex が現在の
-セッション文脈に合わせて実際のフォローアップ質問と選択肢を生成します。
+セッション文脈に合わせて実際の次のステップ質問と選択肢を生成します。
 
 これらの hook は `~/.codex/hooks.json` に additive にマージされ、
 `uninstall` はこのパッケージが管理する項目だけを削除します。
@@ -28,14 +28,14 @@ judge モデルは最近の会話コンテキストを見て `end` / `auto_conti
 - `hooks.json` 用の additive `install` / `uninstall`
 - ローカルパッケージ状態を確認する `doctor`
 - judge endpoint に実際の structured probe を送る `doctor --live-judge`
-- follow-up decision 回帰のための deterministic self-test
+- next-step decision 回帰のための deterministic self-test
 - runtime と endpoint の構成を説明する contract ドキュメント
 - judge mode と短い rationale を記録する transcript debug event
 
 ## 現在の機能
 
 - Codex `Stop` hook 向けの context-aware `end` / `auto_continue` / `ask_user` ロジック
-- assistant の返答自体が follow-up choice や明確な next step を示したときに `end` を防ぐ override guard
+- assistant の返答自体が次のステップ分岐や明確な next step を示したときに `end` を防ぐ override guard
 - `SessionStart` hook による起動時 policy 読み込み
 - Python interpreter と repo root を反映する template rendering
 - ask-user / auto-continue / end 挙動に対する synthetic regression coverage

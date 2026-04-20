@@ -12,10 +12,10 @@ decides whether to:
 
 - end normally
 - auto-continue in the same turn without asking the user
-- ask one `request_user_input` follow-up question
+- ask one `request_user_input` next-step question
 
 The judge decides the tri-state outcome. When it returns `mode="ask_user"`,
-Codex generates the actual follow-up question and options from the live session
+Codex generates the actual next-step question and options from the live session
 context in the same turn.
 
 Defaults:
@@ -131,5 +131,5 @@ When this happens, the transcript debug event keeps the original `raw_judgment`
 and records `judgment_override` metadata for comparison.
 
 - endpoint unreachable or structured output failure: `fail`
-- endpoint reachable but no follow-up action recommendation for the sample closeout: `warn`
-- endpoint reachable and a structured follow-up action recommendation returned as expected: `pass`
+- endpoint reachable but no next-step action recommendation for the sample closeout: `warn`
+- endpoint reachable and a structured next-step action recommendation returned as expected: `pass`

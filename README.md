@@ -5,7 +5,7 @@
 Translations may lag behind the English version.
 
 Codex hooks that help a turn end the right way: finish normally, continue
-automatically, or ask one clear follow-up question.
+automatically, or ask one clear next-step question.
 
 ## What It Does
 
@@ -13,11 +13,11 @@ This package installs two Codex hooks:
 
 - a `SessionStart` hook that loads the basic "keep going vs ask once" policy
   when a Codex session starts or resumes
-- a `Stop` hook that decides whether a closeout should end normally, auto-continue in the same turn, or ask one short follow-up question
+- a `Stop` hook that decides whether a closeout should end normally, auto-continue in the same turn, or ask one short next-step question
 
 The judge model picks the `end` / `auto_continue` / `ask_user` mode by looking
 at the recent conversation context. When `ask_user` is needed, Codex generates
-the actual follow-up question and options from the live session context.
+the actual next-step question and options from the live session context.
 
 The hook entries from this package are merged additively into
 `~/.codex/hooks.json`, and `uninstall` removes only the entries added by this
@@ -29,13 +29,13 @@ package.
    - if there is one clear next step, prefer same-turn follow-through
    - ask only when the user truly needs to choose
 2. `Stop` runs when a turn is about to end.
-3. The `Stop` hook bundles recent conversation flow, recent follow-up question history,
+3. The `Stop` hook bundles recent conversation flow, recent next-step question history,
    and the assistant message that is about to end, then sends that summary to
    the judge model.
 4. The judge returns one of three structured modes:
    - `end`: let the assistant finish normally
    - `auto_continue`: keep going in the same turn without asking the user
-   - `ask_user`: stop and let Codex ask one real follow-up question
+   - `ask_user`: stop and let Codex ask one real next-step question
 5. The main Codex session carries out that result:
    - `end`: the turn closes normally
    - `auto_continue`: Codex receives a continue instruction and keeps moving
@@ -45,7 +45,7 @@ package.
    you can inspect what happened later with `observe`.
 
 The judge only returns the mode, a short rationale, and an optional
-`continue_instruction`. It does not generate the follow-up question itself.
+`continue_instruction`. It does not generate the next-step question itself.
 
 For example:
 
@@ -54,7 +54,7 @@ For example:
 - if the assistant ends with `The patch is in, and the next step is to run
   self-test.`, Codex usually keeps going in the same turn
 - if the assistant ends with `We can either tighten the prompt or inspect more
-  real transcripts.`, Codex usually asks one follow-up question
+  real transcripts.`, Codex usually asks one next-step question
 
 ## Judge Endpoint
 
@@ -96,7 +96,7 @@ summary of the current lane of work.
 The judge mainly looks at:
 
 - the last few turns of conversation
-- the most recent follow-up questions and what the user selected
+- the most recent next-step questions and what the user selected
 - how much work the assistant already did in the current turn
 - the final assistant message that is about to end
 
@@ -106,7 +106,7 @@ For example, the summary might effectively say:
 Recent flow:
 - user: Please simplify the README explanation
 - assistant: I updated the README and finished verification
-- recent follow-up question: "What should we do next?" -> "Verify, then commit"
+- recent next-step question: "What should we do next?" -> "Verify, then commit"
 - final assistant message: "Verification is done, so the next step is to commit."
 ```
 
@@ -131,7 +131,7 @@ Expected behavior by mode:
 - `end`: `continue_instruction` is usually empty
 - `auto_continue`: `continue_instruction` must be non-empty
 - `ask_user`: `continue_instruction` may be empty because Codex will generate
-  the follow-up question itself
+  the next-step question itself
 
 Example outputs:
 
@@ -165,7 +165,7 @@ At the UI level, the behavior feels like this:
 
 - if the turn is truly done, Codex just ends normally
 - if one next action is obvious, Codex keeps going without making you click
-- if a real decision is needed, Codex asks one follow-up question and continues in the
+- if a real decision is needed, Codex asks one next-step question and continues in the
   same turn after you select it
 
 Typical examples:
@@ -189,7 +189,7 @@ Typical examples:
 - Real branch choice:
   - assistant ends with: `We can either inspect more mode_end cases or tighten the prompt wording.`
   - expected mode: `ask_user`
-  - Codex then writes the actual follow-up question in the same turn
+  - Codex then writes the actual next-step question in the same turn
 
 ## Stop-Hook Branch Handling
 
@@ -199,7 +199,7 @@ instructions or lets the turn end:
 - `build_auto_continue_block_reason(...)` tells Codex not to ask another
   question and to continue immediately with the supplied instruction
 - `build_ask_user_block_reason(...)` tells Codex to call
-  `request_user_input` and generate the follow-up question from session context
+  `request_user_input` and generate the next-step question from session context
 - `end` does not produce a follow-up block reason; the turn simply closes
 
 There is also one safety layer after the judge:
@@ -266,7 +266,7 @@ heuristics, then rerun `self-test`, `doctor`, and `observe`.
 - additive `install` and `uninstall` commands for `hooks.json`
 - `doctor` checks for local package health
 - `doctor --live-judge` for a real structured probe against the configured judge endpoint
-- a deterministic self-test runner for follow-up decision regressions
+- a deterministic self-test runner for next-step decision regressions
 - an `observe` CLI for transcript-level judge calibration and mode/rationale inspection
 - a `print-layout` CLI for a quick repository layout snapshot
 - a runtime contract for endpoint and environment configuration

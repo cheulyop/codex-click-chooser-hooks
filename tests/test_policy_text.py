@@ -51,7 +51,7 @@ class PolicyTextTests(unittest.TestCase):
         self.assertIn("older broad\ninstruction alone force another `mode=\"auto_continue\"`", SYSTEM_PROMPT)
 
         fallback = build_ask_user_block_reason({}, [])
-        self.assertIn("Generate the header, exactly one follow-up question", fallback)
+        self.assertIn("Generate the header, exactly one next-step question", fallback)
         self.assertIn("the natural single-select options yourself", fallback)
         self.assertNotIn("one short question", fallback)
         self.assertNotIn("2-3", fallback)
