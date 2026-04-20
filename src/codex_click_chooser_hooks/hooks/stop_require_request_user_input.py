@@ -17,7 +17,7 @@ from typing import Optional
 JUDGE_URL = os.environ.get("CODEX_RUI_JUDGE_URL", "http://127.0.0.1:10531/v1/responses")
 JUDGE_MODEL = os.environ.get("CODEX_RUI_JUDGE_MODEL", "gpt-5.4")
 JUDGE_REASONING_EFFORT = os.environ.get("CODEX_RUI_JUDGE_REASONING_EFFORT", "medium")
-JUDGE_TIMEOUT_SECONDS = float(os.environ.get("CODEX_RUI_JUDGE_TIMEOUT_SECONDS", "8"))
+JUDGE_TIMEOUT_SECONDS = float(os.environ.get("CODEX_RUI_JUDGE_TIMEOUT_SECONDS", "15"))
 STOP_SELECTION_TERMS = (
     "종료",
     "마무리",
@@ -31,6 +31,7 @@ STOP_SELECTION_TERMS = (
 RECENT_TURNS_LIMIT = 6
 RECENT_CHOOSERS_LIMIT = 6
 CURRENT_TURN_MESSAGES_LIMIT = 3
+CURRENT_TURN_TIMELINE_LIMIT = 12
 MAX_CONTEXT_TEXT_CHARS = 240
 FOLLOW_UP_CHOICE_PATTERNS = (
     re.compile(r"\boptions like\b", re.IGNORECASE),
@@ -215,13 +216,42 @@ def normalize_compare_text(text: Optional[str]) -> str:
     return re.sub(r"\s+", " ", text.strip().lower())
 
 
-def compact_text(text: Optional[str], max_chars: int = MAX_CONTEXT_TEXT_CHARS) -> str:
-    normalized = normalize_compare_text(text)
+def compact_render_text(text: Optional[str], max_chars: int = MAX_CONTEXT_TEXT_CHARS) -> str:
+    if not isinstance(text, str):
+        return ""
+    normalized = re.sub(r"\s+", " ", text.strip())
     if not normalized:
         return ""
     if len(normalized) <= max_chars:
         return normalized
     return normalized[: max_chars - 1].rstrip() + "…"
+
+
+def summarize_error_text(text: Optional[str], max_chars: int = 160) -> str:
+    if not isinstance(text, str):
+        return ""
+    normalized = re.sub(r"\s+", " ", text.strip())
+    if not normalized:
+        return ""
+    if len(normalized) <= max_chars:
+        return normalized
+    return normalized[: max_chars - 1].rstrip() + "…"
+
+
+def describe_judge_failure(exc: Exception) -> str:
+    if isinstance(exc, urllib.error.URLError):
+        reason = exc.reason
+        if isinstance(reason, BaseException):
+            detail = f"{type(reason).__name__}: {reason}"
+        elif reason:
+            detail = str(reason)
+        else:
+            detail = str(exc)
+        return f"{type(exc).__name__}: {detail}"
+    detail = str(exc).strip()
+    if detail:
+        return f"{type(exc).__name__}: {detail}"
+    return type(exc).__name__
 
 
 def is_runtime_control_message(text: Optional[str]) -> bool:
@@ -257,6 +287,7 @@ def summarize_current_turn(turn: Dict[str, Any]) -> Dict[str, Any]:
     user_messages = list(turn.get("user_messages", []))
     assistant_messages = list(turn.get("assistant_messages", []))
     assistant_messages_since_last_user: List[str] = []
+    recent_timeline: List[Dict[str, str]] = []
 
     last_user_index: Optional[int] = None
     for index in range(len(timeline) - 1, -1, -1):
@@ -264,6 +295,24 @@ def summarize_current_turn(turn: Dict[str, Any]) -> Dict[str, Any]:
         if item.get("role") == "user":
             last_user_index = index
             break
+
+    for item in timeline[-CURRENT_TURN_TIMELINE_LIMIT:]:
+        role = item.get("role")
+        text = item.get("text")
+        if role in {"user", "assistant"} and isinstance(text, str) and text.strip():
+            recent_timeline.append({"role": role, "text": text.strip()})
+
+    timeline_since_last_user: List[Dict[str, str]] = []
+    start_index = (
+        last_user_index
+        if last_user_index is not None
+        else max(0, len(timeline) - CURRENT_TURN_TIMELINE_LIMIT)
+    )
+    for item in timeline[start_index:]:
+        role = item.get("role")
+        text = item.get("text")
+        if role in {"user", "assistant"} and isinstance(text, str) and text.strip():
+            timeline_since_last_user.append({"role": role, "text": text.strip()})
 
     if last_user_index is not None:
         for item in timeline[last_user_index + 1 :]:
@@ -283,6 +332,8 @@ def summarize_current_turn(turn: Dict[str, Any]) -> Dict[str, Any]:
         "assistant_messages_since_last_user_texts": assistant_messages_since_last_user[
             -CURRENT_TURN_MESSAGES_LIMIT:
         ],
+        "recent_timeline": recent_timeline,
+        "timeline_since_last_user": timeline_since_last_user,
     }
 
 
@@ -307,6 +358,22 @@ def prior_assistant_messages_before_final(
                 break
 
     return messages[-CURRENT_TURN_MESSAGES_LIMIT:]
+
+
+def summarize_timeline_entries(
+    entries: Any, max_chars: int = MAX_CONTEXT_TEXT_CHARS
+) -> List[Dict[str, str]]:
+    summarized: List[Dict[str, str]] = []
+    if not isinstance(entries, list):
+        return summarized
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        role = item.get("role")
+        text = compact_render_text(item.get("text"), max_chars)
+        if role in {"user", "assistant"} and text:
+            summarized.append({"role": role, "text": text})
+    return summarized
 
 
 def read_recent_session_context(
@@ -493,9 +560,9 @@ def extract_request_user_input_answers(output: str) -> List[str]:
 
 def chooser_option_labels(chooser: Dict[str, Any]) -> List[str]:
     return [
-        compact_text(option.get("label"), 80)
+        compact_render_text(option.get("label"), 80)
         for option in normalize_options(chooser.get("options"))
-        if compact_text(option.get("label"), 80)
+        if compact_render_text(option.get("label"), 80)
     ]
 
 
@@ -518,7 +585,7 @@ def judge_should_request(
     recent_turns: List[Dict[str, Any]],
     recent_choosers: List[Dict[str, Any]],
     current_turn_context: Dict[str, Any],
-) -> Optional[Dict[str, Any]]:
+) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
     context_parts = ["Recent session context follows."]
     if recent_turns:
         context_parts.extend(["", "<recent_session_context>"])
@@ -526,10 +593,11 @@ def judge_should_request(
             context_parts.append(f'<turn id="{turn.get("turn_id", "")}">')
             user_messages = turn.get("user_messages", [])
             if user_messages:
+                rendered_last_user_message = compact_render_text(user_messages[-1], 240)
                 context_parts.extend(
                     [
                         "<last_user_message>",
-                        compact_text(user_messages[-1]),
+                        rendered_last_user_message,
                         "</last_user_message>",
                     ]
                 )
@@ -537,16 +605,16 @@ def judge_should_request(
             if requests:
                 context_parts.append("<request_user_input_history>")
                 for request in requests[-2:]:
-                    question = compact_text(request.get("question"))
+                    question = compact_render_text(request.get("question"), 200)
                     if question:
                         context_parts.append(f"- question: {question}")
                     option_labels = chooser_option_labels(request)
                     if option_labels:
                         context_parts.append(f"  options: {', '.join(option_labels)}")
                     answers = [
-                        compact_text(answer, 120)
+                        compact_render_text(answer, 120)
                         for answer in request.get("answers", [])
-                        if compact_text(answer, 120)
+                        if compact_render_text(answer, 120)
                     ]
                     if answers:
                         context_parts.append(f"  user_answer: {' | '.join(answers)}")
@@ -554,11 +622,12 @@ def judge_should_request(
             context_parts.append("</turn>")
         context_parts.append("</recent_session_context>")
     if isinstance(last_user_message, str) and last_user_message.strip():
+        rendered_last_user_message = compact_render_text(last_user_message, 240)
         context_parts.extend(
             [
                 "",
                 "<last_user_message>",
-                last_user_message.strip(),
+                rendered_last_user_message,
                 "</last_user_message>",
             ]
         )
@@ -582,42 +651,28 @@ def judge_should_request(
         )
         context_parts.append("</current_turn_state>")
 
-        current_turn_user_messages = [
-            compact_text(message, 200)
-            for message in current_turn_context.get("recent_user_messages", [])
-            if compact_text(message, 200)
-        ]
-        if current_turn_user_messages:
-            context_parts.extend(["", "<current_turn_user_messages>"])
-            for message in current_turn_user_messages:
-                context_parts.append(f"- user: {message}")
-            context_parts.append("</current_turn_user_messages>")
-
-        prior_assistant_messages = [
-            compact_text(message, 200)
-            for message in prior_assistant_messages_before_final(
-                current_turn_context, last_assistant_message
-            )
-            if compact_text(message, 200)
-        ]
-        if prior_assistant_messages:
-            context_parts.extend(["", "<current_turn_assistant_history_before_final>"])
-            for message in prior_assistant_messages:
-                context_parts.append(f"- assistant: {message}")
-            context_parts.append("</current_turn_assistant_history_before_final>")
+        timeline_since_last_user = summarize_timeline_entries(
+            current_turn_context.get("timeline_since_last_user"),
+            320,
+        )
+        if timeline_since_last_user:
+            context_parts.extend(["", "<current_turn_timeline_since_last_user>"])
+            for item in timeline_since_last_user:
+                context_parts.append(f"- {item['role']}: {item['text']}")
+            context_parts.append("</current_turn_timeline_since_last_user>")
     if recent_choosers:
         context_parts.extend(["", "<recent_chooser_summary>"])
         for chooser in recent_choosers[-3:]:
-            question = compact_text(chooser.get("question"))
+            question = compact_render_text(chooser.get("question"), 200)
             if question:
                 context_parts.append(f"- question: {question}")
             option_labels = chooser_option_labels(chooser)
             if option_labels:
                 context_parts.append(f"  options: {', '.join(option_labels)}")
             answers = [
-                compact_text(answer, 120)
+                compact_render_text(answer, 120)
                 for answer in chooser.get("answers", [])
-                if compact_text(answer, 120)
+                if compact_render_text(answer, 120)
             ]
             if answers:
                 context_parts.append(f"  user_answer: {' | '.join(answers)}")
@@ -670,8 +725,8 @@ def judge_should_request(
     try:
         with urllib.request.urlopen(request, timeout=JUDGE_TIMEOUT_SECONDS) as response:
             payload = json.loads(response.read().decode("utf-8"))
-    except (urllib.error.URLError, TimeoutError, ValueError):
-        return None
+    except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+        return None, describe_judge_failure(exc)
     output_text = payload.get("output_text")
     if not isinstance(output_text, str):
         output = payload.get("output")
@@ -692,8 +747,14 @@ def judge_should_request(
                 if isinstance(output_text, str):
                     break
     if not isinstance(output_text, str):
-        return None
-    return parse_json_object(output_text)
+        return None, "judge response missing output_text"
+    judgment = parse_json_object(output_text)
+    if not isinstance(judgment, dict):
+        snippet = summarize_error_text(output_text)
+        if snippet:
+            return None, f"judge returned non-JSON-object output: {snippet}"
+        return None, "judge returned non-JSON-object output"
+    return judgment, None
 
 
 def normalize_options(raw_options: Any) -> List[Dict[str, str]]:
@@ -815,9 +876,9 @@ def build_debug_current_turn_context(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
     recent_user_messages = [
-        compact_text(message, 160)
+        compact_render_text(message, 160)
         for message in context.get("recent_user_messages", [])
-        if compact_text(message, 160)
+        if compact_render_text(message, 160)
     ]
     if recent_user_messages:
         summary["recent_user_messages"] = recent_user_messages
@@ -825,16 +886,27 @@ def build_debug_current_turn_context(payload: Dict[str, Any]) -> Dict[str, Any]:
     last_assistant_message = payload.get("last_assistant_message")
     if isinstance(last_assistant_message, str) and last_assistant_message.strip():
         prior_assistant_messages = [
-            compact_text(message, 160)
+            compact_render_text(message, 160)
             for message in prior_assistant_messages_before_final(
                 context, last_assistant_message
             )
-            if compact_text(message, 160)
+            if compact_render_text(message, 160)
         ]
         if prior_assistant_messages:
             summary["prior_assistant_messages_before_final"] = (
                 prior_assistant_messages
             )
+
+    recent_timeline = summarize_timeline_entries(context.get("recent_timeline"), 160)
+    if recent_timeline:
+        summary["recent_timeline"] = recent_timeline
+
+    timeline_since_last_user = summarize_timeline_entries(
+        context.get("timeline_since_last_user"),
+        160,
+    )
+    if timeline_since_last_user:
+        summary["timeline_since_last_user"] = timeline_since_last_user
 
     return summary
 
@@ -847,6 +919,7 @@ def build_stop_hook_debug_payload(
     judgment: Optional[Dict[str, Any]] = None,
     raw_judgment: Optional[Dict[str, Any]] = None,
     judgment_override: Optional[Dict[str, Any]] = None,
+    judge_failure_reason: Optional[str] = None,
 ) -> Dict[str, Any]:
     debug_payload: Dict[str, Any] = {
         "type": "stop_hook_judgment",
@@ -856,7 +929,15 @@ def build_stop_hook_debug_payload(
         "status": status,
         "judge_model": JUDGE_MODEL,
         "judge_reasoning_effort": JUDGE_REASONING_EFFORT,
+        "judge_timeout_seconds": JUDGE_TIMEOUT_SECONDS,
     }
+    if isinstance(judge_failure_reason, str) and judge_failure_reason.strip():
+        debug_payload["judge_failure_reason"] = judge_failure_reason.strip()
+
+    current_turn_context = build_debug_current_turn_context(payload)
+    if current_turn_context:
+        debug_payload["current_turn_context"] = current_turn_context
+
     if not isinstance(judgment, dict):
         return debug_payload
 
@@ -880,10 +961,6 @@ def build_stop_hook_debug_payload(
 
     if isinstance(judgment_override, dict):
         debug_payload["judgment_override"] = judgment_override
-
-    current_turn_context = build_debug_current_turn_context(payload)
-    if current_turn_context:
-        debug_payload["current_turn_context"] = current_turn_context
 
     return debug_payload
 
@@ -920,16 +997,16 @@ def render_recent_chooser_history(recent_choosers: List[Dict[str, Any]]) -> str:
         return ""
     lines = ["Recent chooser history:"]
     for chooser in recent_choosers[-3:]:
-        question = compact_text(chooser.get("question"))
+        question = compact_render_text(chooser.get("question"), 200)
         if question:
             lines.append(f"- Question: {question}")
         option_labels = chooser_option_labels(chooser)
         if option_labels:
             lines.append(f"  Options: {', '.join(option_labels)}")
         answers = [
-            compact_text(answer, 120)
+            compact_render_text(answer, 120)
             for answer in chooser.get("answers", [])
-            if compact_text(answer, 120)
+            if compact_render_text(answer, 120)
         ]
         if answers:
             lines.append(f"  User answer: {' | '.join(answers)}")
@@ -1048,7 +1125,7 @@ def should_continue(payload: Dict[str, Any]) -> bool:
             status="explicit_stop_already_selected",
         )
         return True
-    raw_judgment = judge_should_request(
+    raw_judgment, judge_failure_reason = judge_should_request(
         message,
         last_user_message,
         recent_turns,
@@ -1060,6 +1137,7 @@ def should_continue(payload: Dict[str, Any]) -> bool:
             payload,
             decision="continue",
             status="judge_unavailable",
+            judge_failure_reason=judge_failure_reason,
         )
         return True
     judgment, judgment_override = apply_end_mode_overrides(message, raw_judgment)

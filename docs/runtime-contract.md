@@ -23,7 +23,7 @@ Defaults:
 - endpoint: `http://127.0.0.1:10531/v1/responses`
 - model: `gpt-5.4`
 - reasoning effort: `medium`
-- timeout: `8` seconds
+- timeout: `15` seconds
 
 Implementation:
 
@@ -71,11 +71,11 @@ export CODEX_RUI_JUDGE_REASONING_EFFORT=medium
 ### `CODEX_RUI_JUDGE_TIMEOUT_SECONDS`
 
 - meaning: time to wait for the judge response
-- default: `8`
+- default: `15`
 - use when: the endpoint is slower or the timeout is too aggressive
 
 ```bash
-export CODEX_RUI_JUDGE_TIMEOUT_SECONDS=8
+export CODEX_RUI_JUDGE_TIMEOUT_SECONDS=15
 ```
 
 ## Install-Time Rendering
@@ -114,6 +114,11 @@ model configuration as the real hook.
 
 The live probe and transcript debug event both surface the judge's short
 `rationale` when the endpoint provides it.
+
+When the judge endpoint is unavailable or returns malformed structured output,
+the transcript debug event records `status="judge_unavailable"` together with a
+best-effort `judge_failure_reason`, and `doctor --live-judge` reports the same
+reason string in its `error` field.
 
 At runtime, the hook may override a raw `mode="end"` if the assistant message
 itself clearly surfaces either:

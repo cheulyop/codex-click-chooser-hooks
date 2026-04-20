@@ -15,7 +15,7 @@
     "decision": "block",
     "context_contains": [
       "<recent_chooser_summary>",
-      "refine decision rules first",
+      "Refine decision rules first",
       "A short next-step chooser usually works well after an explanatory response."
     ],
     "reason_contains": [

@@ -4,6 +4,7 @@ import json
 import sys
 import tempfile
 import unittest
+import urllib.error
 import urllib.request
 from contextlib import redirect_stdout
 from io import StringIO
@@ -30,12 +31,14 @@ class FakeHTTPResponse:
 class TranscriptLoggingTests(unittest.TestCase):
     def run_main_with_judgment(
         self,
-        judgment: dict[str, Any],
+        judgment: dict[str, Any] | None,
         *,
         last_assistant_message: str = (
             "The install is already current and the latest session policy was loaded."
         ),
         transcript_lines: list[str] | None = None,
+        response_payload: dict[str, Any] | None = None,
+        urlopen_exception: Exception | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         with tempfile.TemporaryDirectory() as temp_dir:
             transcript_path = Path(temp_dir) / "transcript.jsonl"
@@ -56,7 +59,12 @@ class TranscriptLoggingTests(unittest.TestCase):
 
             def fake_urlopen(request: Any, timeout: float = 0) -> FakeHTTPResponse:
                 del request, timeout
-                return FakeHTTPResponse({"output_text": json.dumps(judgment)})
+                if urlopen_exception is not None:
+                    raise urlopen_exception
+                payload = response_payload
+                if payload is None:
+                    payload = {"output_text": json.dumps(judgment)}
+                return FakeHTTPResponse(payload)
 
             urllib.request.urlopen = fake_urlopen
             sys.stdin = StringIO(json.dumps(payload))
@@ -211,7 +219,103 @@ class TranscriptLoggingTests(unittest.TestCase):
         self.assertEqual(context["request_count"], 0)
         self.assertEqual(
             context["prior_assistant_messages_before_final"],
-            ["i checked the launcher path first."],
+            ["I checked the launcher path first."],
+        )
+        self.assertEqual(
+            context["timeline_since_last_user"],
+            [
+                {"role": "user", "text": "Go ahead and keep moving."},
+                {"role": "assistant", "text": "I checked the launcher path first."},
+                {
+                    "role": "assistant",
+                    "text": "The config flag is still missing in the current runtime path.",
+                },
+            ],
+        )
+
+    def test_main_logs_judge_unavailable_failure_reason(self) -> None:
+        hook_output, event = self.run_main_with_judgment(
+            None,
+            urlopen_exception=urllib.error.URLError(TimeoutError("timed out")),
+        )
+
+        self.assertEqual(hook_output, {"continue": True})
+        self.assertEqual(event["payload"]["decision"], "continue")
+        self.assertEqual(event["payload"]["status"], "judge_unavailable")
+        self.assertEqual(event["payload"]["judge_timeout_seconds"], 15.0)
+        self.assertEqual(
+            event["payload"]["judge_failure_reason"],
+            "URLError: TimeoutError: timed out",
+        )
+
+    def test_judge_request_includes_raw_current_turn_timeline(self) -> None:
+        original_urlopen = urllib.request.urlopen
+        captured_prompt: dict[str, str] = {}
+
+        def fake_urlopen(request: Any, timeout: float = 0) -> FakeHTTPResponse:
+            del timeout
+            body = json.loads(request.data.decode("utf-8"))
+            captured_prompt["text"] = body["input"][1]["content"][0]["text"]
+            return FakeHTTPResponse(
+                {
+                    "output_text": json.dumps(
+                        {
+                            "mode": "end",
+                            "continue_instruction": "",
+                            "rationale": "The reply is complete.",
+                        }
+                    )
+                }
+            )
+
+        current_turn_context = {
+            "user_message_count": 1,
+            "assistant_message_count": 2,
+            "request_count": 0,
+            "assistant_messages_since_last_user": 2,
+            "recent_user_messages": ["Go ahead and keep moving."],
+            "recent_timeline": [
+                {"role": "user", "text": "Go ahead and keep moving."},
+                {"role": "assistant", "text": "I checked the launcher path first."},
+                {
+                    "role": "assistant",
+                    "text": "The config flag is still missing in the current runtime path.",
+                },
+            ],
+            "timeline_since_last_user": [
+                {"role": "user", "text": "Go ahead and keep moving."},
+                {"role": "assistant", "text": "I checked the launcher path first."},
+                {
+                    "role": "assistant",
+                    "text": "The config flag is still missing in the current runtime path.",
+                },
+            ],
+        }
+
+        urllib.request.urlopen = fake_urlopen
+        try:
+            judgment, failure_reason = stop_hook.judge_should_request(
+                "The config flag is still missing in the current runtime path.",
+                "Go ahead and keep moving.",
+                [],
+                [],
+                current_turn_context,
+            )
+        finally:
+            urllib.request.urlopen = original_urlopen
+
+        self.assertIsNone(failure_reason)
+        self.assertEqual(judgment["mode"], "end")
+        prompt_text = captured_prompt["text"]
+        self.assertIn("<current_turn_timeline_since_last_user>", prompt_text)
+        self.assertNotIn("<current_turn_user_messages>", prompt_text)
+        self.assertNotIn("<current_turn_assistant_history_before_final>", prompt_text)
+        self.assertNotIn("<current_turn_recent_timeline>", prompt_text)
+        self.assertIn("Go ahead and keep moving.", prompt_text)
+        self.assertIn("I checked the launcher path first.", prompt_text)
+        self.assertIn(
+            "The config flag is still missing in the current runtime path.",
+            prompt_text,
         )
 
 

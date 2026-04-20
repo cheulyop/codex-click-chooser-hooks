@@ -15,7 +15,7 @@
     "decision": "block",
     "context_contains": [
       "<recent_chooser_summary>",
-      "implement the tri-state flow",
+      "Implement the tri-state flow",
       "The obvious next step is to update the schema and split the stop-hook branch handling."
     ],
     "reason_contains": [

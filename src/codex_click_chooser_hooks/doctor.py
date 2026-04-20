@@ -33,11 +33,12 @@ def run_live_judge_probe() -> dict[str, Any]:
         "We can add a concrete example or refine the chooser decision rules."
     )
     try:
-        judgment = stop_hook.judge_should_request(
+        judgment, failure_reason = stop_hook.judge_should_request(
             probe_message,
             None,
             [],
             [],
+            {},
         )
     except Exception as exc:
         return {
@@ -56,7 +57,7 @@ def run_live_judge_probe() -> dict[str, Any]:
             "model": stop_hook.JUDGE_MODEL,
             "reasoning_effort": stop_hook.JUDGE_REASONING_EFFORT,
             "timeout_seconds": stop_hook.JUDGE_TIMEOUT_SECONDS,
-            "error": "judge returned no structured response",
+            "error": failure_reason or "judge returned no structured response",
         }
 
     mode = stop_hook.normalize_mode(judgment.get("mode"))
