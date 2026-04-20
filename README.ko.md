@@ -28,16 +28,17 @@ judge 모델은 최근 대화 맥락을 보고 `end` / `auto_continue` / `ask_us
    Codex 세션에 로드합니다.
 2. 턴이 끝나기 직전에 `Stop` hook 이 실행됩니다.
 3. `Stop` hook 은 transcript에서 최근 turn 기록을 다시 구성합니다. 여기서
-   `turn`은 `turn_id`를 기준으로 묶인 하나의 재구성된 대화 단위입니다. 각
-   turn에 대해 `user_messages`, `assistant_messages`, `requests`,
-   `timeline`을 추적합니다.
+   `turn`은 `turn_id`를 기준으로 묶인 하나의 재구성된 대화 단위입니다.
+   내부적으로는 각 turn이 raw `user_messages`, `assistant_messages`,
+   `requests`, `timeline` 필드를 따로 들지 않고, 순서가 보존된 하나의
+   `entries` stream을 유지합니다.
 4. 현재 turn에 대해서는 전체 transcript를 그대로 보내지 않고 compact한
    summary를 만듭니다.
    - 최근 turn window: 최대 `6`개 turn
    - chooser history window: 최대 `6`개 chooser
-   - current-turn timeline window: 최대 `12`개 timeline item
-     여기서 각 item은 그 turn timeline 안의 user 또는 assistant message
-     하나를 뜻합니다
+   - current-turn timeline window: 최대 `12`개 derived timeline item
+     여기서 각 item은 ordered `entries` stream에서 다시 복원한 user 또는
+     assistant message 하나를 뜻합니다
    - assistant message count, chooser count 같은 coarse turn-shape 카운트
 5. 이 compact prompt를 judge 모델로 보냅니다.
 6. judge는 세 가지 structured mode 중 하나를 반환합니다.
@@ -88,11 +89,30 @@ Stop hook은 raw transcript 전체를 그대로 judge에 보내지 않습니다.
 
 현재 turn 요약은 대략 이런 순서로 만들어집니다.
 
-1. transcript에서 최근 turn들을 다시 구성합니다
-2. 현재 turn의 user / assistant message를 수집합니다
+1. transcript에서 최근 turn들을 ordered `entries`로 다시 구성합니다
+2. 그 `entries`에서 현재 turn의 message timeline과 chooser history를 파생합니다
 3. assistant message count, chooser count 같은 coarse turn-shape 카운트를 계산합니다
-4. 최신 user message 이후의 timeline을 current-turn 핵심 블록으로 유지합니다
+4. 최신 user message 이후의 derived timeline을 current-turn 핵심 블록으로 유지합니다
 5. 최근 chooser history를 별도 블록으로 붙여서, 이미 무엇을 보여줬고 어떤 응답이 있었는지 judge가 볼 수 있게 합니다
+
+현재 raw turn shape는 대략 이렇습니다.
+
+```python
+turn = {
+  "turn_id": "t2",
+  "entries": [
+    {"kind": "message", "role": "user", "text": "U1"},
+    {"kind": "message", "role": "assistant", "text": "A1"},
+    {"kind": "request_user_input", "call_id": "c1", "...": "..."},
+    {"kind": "request_user_input_output", "call_id": "c1", "answers": ["A"]},
+    {"kind": "message", "role": "user", "text": "U2"},
+    {"kind": "message", "role": "assistant", "text": "A2"},
+  ],
+}
+```
+
+이 ordered stream에서 judge가 보는 `last_user_message`,
+`recent_choosers`, `timeline_since_last_user`, 각종 count 필드를 다시 계산합니다.
 
 현재 prompt 형태는 대략 이렇습니다.
 

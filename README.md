@@ -27,15 +27,16 @@ The managed hooks are merged additively into `~/.codex/hooks.json`, and the
    the Codex session.
 2. `Stop` runs when a turn is about to end.
 3. The `Stop` hook rebuilds recent turn history from the transcript. Here, a
-   `turn` is one reconstructed conversation unit keyed by `turn_id`. For each
-   turn, the hook tracks `user_messages`, `assistant_messages`, `requests`,
-   and a simple `timeline`.
+   `turn` is one reconstructed conversation unit keyed by `turn_id`. Internally,
+   each turn keeps one ordered `entries` stream instead of separate raw
+   `user_messages`, `assistant_messages`, `requests`, and `timeline` fields.
 4. For the current turn, it derives a compact summary instead of shipping the
    whole transcript:
    - recent turn window: up to `6` turns
    - chooser history window: up to `6` recent choosers
-   - current-turn timeline window: up to `12` timeline items, where each
-     item is one user or assistant message entry inside the turn timeline
+   - current-turn timeline window: up to `12` derived timeline items, where
+     each item is one user or assistant message entry reconstructed from the
+     ordered `entries` stream
    - current-turn counts such as assistant message count and chooser count
 5. The hook sends that compact prompt to a judge model.
 6. The judge returns one of three structured modes:
@@ -85,14 +86,34 @@ text prompt that reflects the current lane of work.
 
 Current-turn summarization works like this:
 
-1. rebuild recent turns from the transcript
-2. collect the current turn's user and assistant messages
+1. rebuild recent turns from the transcript as ordered `entries`
+2. derive the current turn's message timeline and chooser history from those
+   entries
 3. compute coarse turn-shape counters such as assistant message count and
    chooser count
-4. keep the timeline from the latest user message onward as the main
+4. keep the derived timeline from the latest user message onward as the main
    current-turn block
 5. attach recent chooser history separately so the judge can see what was
    already offered and selected
+
+The raw turn shape now looks like this:
+
+```python
+turn = {
+  "turn_id": "t2",
+  "entries": [
+    {"kind": "message", "role": "user", "text": "U1"},
+    {"kind": "message", "role": "assistant", "text": "A1"},
+    {"kind": "request_user_input", "call_id": "c1", "...": "..."},
+    {"kind": "request_user_input_output", "call_id": "c1", "answers": ["A"]},
+    {"kind": "message", "role": "user", "text": "U2"},
+    {"kind": "message", "role": "assistant", "text": "A2"},
+  ],
+}
+```
+
+From that ordered stream, the hook derives the judge-facing `last_user_message`,
+`recent_choosers`, `timeline_since_last_user`, and count fields.
 
 The current shape is:
 

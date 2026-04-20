@@ -462,7 +462,7 @@ def read_recent_session_context(
 
     turns: List[Dict[str, Any]] = []
     turn_by_id: Dict[str, Dict[str, Any]] = {}
-    pending_by_call_id: Dict[str, Dict[str, Any]] = {}
+    pending_request_call_ids: set[str] = set()
     current_turn: Optional[Dict[str, Any]] = None
 
     def ensure_turn(current_turn_id: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -539,15 +539,14 @@ def read_recent_session_context(
                     "options": parsed.get("options"),
                 }
                 current_turn.setdefault("entries", []).append(request_entry)
-                pending_by_call_id[call_id] = request_entry
+                pending_request_call_ids.add(call_id)
                 continue
 
             if payload.get("type") == "function_call_output":
                 call_id = payload.get("call_id")
                 if not isinstance(call_id, str):
                     continue
-                previous = pending_by_call_id.get(call_id)
-                if previous is None:
+                if call_id not in pending_request_call_ids:
                     continue
                 current_turn.setdefault("entries", []).append(
                     {
