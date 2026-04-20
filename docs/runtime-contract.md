@@ -23,7 +23,7 @@ Defaults:
 - endpoint: `http://127.0.0.1:10531/v1/responses`
 - model: `gpt-5.4`
 - reasoning effort: `medium`
-- timeout: `15` seconds
+- timeout: `30` seconds
 
 Implementation:
 
@@ -71,11 +71,11 @@ export CODEX_RUI_JUDGE_REASONING_EFFORT=medium
 ### `CODEX_RUI_JUDGE_TIMEOUT_SECONDS`
 
 - meaning: time to wait for the judge response
-- default: `15`
+- default: `30`
 - use when: the endpoint is slower or the timeout is too aggressive
 
 ```bash
-export CODEX_RUI_JUDGE_TIMEOUT_SECONDS=15
+export CODEX_RUI_JUDGE_TIMEOUT_SECONDS=30
 ```
 
 ## Install-Time Rendering

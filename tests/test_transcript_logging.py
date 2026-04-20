@@ -242,7 +242,7 @@ class TranscriptLoggingTests(unittest.TestCase):
         self.assertEqual(hook_output, {"continue": True})
         self.assertEqual(event["payload"]["decision"], "continue")
         self.assertEqual(event["payload"]["status"], "judge_unavailable")
-        self.assertEqual(event["payload"]["judge_timeout_seconds"], 15.0)
+        self.assertEqual(event["payload"]["judge_timeout_seconds"], 30.0)
         self.assertEqual(
             event["payload"]["judge_failure_reason"],
             "URLError: TimeoutError: timed out",

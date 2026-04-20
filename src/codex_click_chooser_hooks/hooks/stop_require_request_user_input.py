@@ -17,7 +17,7 @@ from typing import Optional
 JUDGE_URL = os.environ.get("CODEX_RUI_JUDGE_URL", "http://127.0.0.1:10531/v1/responses")
 JUDGE_MODEL = os.environ.get("CODEX_RUI_JUDGE_MODEL", "gpt-5.4")
 JUDGE_REASONING_EFFORT = os.environ.get("CODEX_RUI_JUDGE_REASONING_EFFORT", "medium")
-JUDGE_TIMEOUT_SECONDS = float(os.environ.get("CODEX_RUI_JUDGE_TIMEOUT_SECONDS", "15"))
+JUDGE_TIMEOUT_SECONDS = float(os.environ.get("CODEX_RUI_JUDGE_TIMEOUT_SECONDS", "30"))
 STOP_SELECTION_TERMS = (
     "종료",
     "마무리",
