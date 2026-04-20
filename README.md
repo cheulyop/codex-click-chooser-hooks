@@ -9,22 +9,28 @@ automatically, or ask one clear follow-up question.
 
 ## What It Does
 
-This package installs two managed Codex hooks:
+This package installs two Codex hooks:
 
-- a `SessionStart` hook that loads chooser policy on startup and resume
+- a `SessionStart` hook that loads a short closeout policy into the Codex
+  session on startup and resume
 - a `Stop` hook that decides whether a closeout should end normally, auto-continue in the same turn, or show a short follow-up chooser
 
 The judge model picks the `end` / `auto_continue` / `ask_user` mode by looking
 at the recent conversation context. When `ask_user` is needed, Codex generates
 the actual chooser question and options from the live session context.
 
-The managed hooks are merged additively into `~/.codex/hooks.json`, and the
-`uninstall` command removes only the handlers owned by this package.
+The hook entries from this package are merged additively into
+`~/.codex/hooks.json`, and `uninstall` removes only the entries added by this
+package.
 
 ## How It Works
 
-1. `SessionStart` runs on startup and resume and loads the chooser policy into
-   the Codex session.
+1. `SessionStart` runs on startup and resume and writes a short policy into
+   `hookSpecificOutput.additionalContext` for the Codex session.
+   - it tells Codex to prefer automatic same-turn follow-through when one
+     clear next step exists
+   - it tells Codex to use `request_user_input` only when the user really
+     needs to choose among materially different next paths
 2. `Stop` runs when a turn is about to end.
 3. The `Stop` hook rebuilds recent turn history from the transcript. Here, a
    `turn` is one reconstructed conversation unit keyed by `turn_id`. Internally,
@@ -34,9 +40,8 @@ The managed hooks are merged additively into `~/.codex/hooks.json`, and the
    whole transcript:
    - recent turn window: up to `6` turns
    - chooser history window: up to `6` recent choosers
-   - current-turn timeline window: up to `12` derived timeline items, where
-     each item is one user or assistant message entry reconstructed from the
-     ordered `entries` stream
+   - current-turn message-sequence window: up to `12` derived message entries,
+     reconstructed from the ordered `entries` stream
    - current-turn counts such as assistant message count and chooser count
 5. The hook sends that compact prompt to a judge model.
 6. The judge returns one of three structured modes:
@@ -87,11 +92,11 @@ text prompt that reflects the current lane of work.
 Current-turn summarization works like this:
 
 1. rebuild recent turns from the transcript as ordered `entries`
-2. derive the current turn's message timeline and chooser history from those
+2. derive the current turn's message sequence view and chooser history from those
    entries
 3. compute coarse turn-shape counters such as assistant message count and
    chooser count
-4. keep the derived timeline from the latest user message onward as the main
+4. keep the derived message sequence from the latest user message onward as the main
    current-turn block
 5. attach recent chooser history separately so the judge can see what was
    already offered and selected
@@ -112,8 +117,13 @@ turn = {
 }
 ```
 
-From that ordered stream, the hook derives the judge-facing `last_user_message`,
-`recent_choosers`, `timeline_since_last_user`, and count fields.
+There is no raw `timeline` field anymore. From that ordered stream, the hook
+derives the judge-facing `last_user_message`, `recent_choosers`,
+`timeline_since_last_user`, and count fields.
+
+The judge prompt still uses the block name
+`<current_turn_timeline_since_last_user>`, but that block is now a derived view
+from `entries`, not a raw stored field.
 
 The current shape is:
 
@@ -394,8 +404,8 @@ PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli install --json
 What `install` does:
 
 - renders the hook template with the current Python interpreter path
-- injects the current repo root into the managed hook commands
-- merges the managed handlers into `~/.codex/hooks.json`
+- injects the current repo root into the hook commands added by this package
+- merges the hook entries from this package into `~/.codex/hooks.json`
 - creates a backup before writing if the file changes
 
 ## Verify
@@ -450,19 +460,19 @@ Preview the removal:
 PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli uninstall --dry-run --json
 ```
 
-Remove the managed handlers:
+Remove the hook entries added by this package:
 
 ```bash
 PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli uninstall --json
 ```
 
-`uninstall` removes only the handlers marked as managed by this package and
+`uninstall` removes only the hook entries added by this package and
 leaves unrelated hook configuration intact.
 
 ## CLI Commands
 
-- `install`: render the hook template and merge the managed handlers into `hooks.json`
-- `uninstall`: remove only the managed handlers while leaving unrelated hook config intact
+- `install`: render the hook template and merge the hook entries from this package into `hooks.json`
+- `uninstall`: remove only the hook entries from this package while leaving unrelated hook config intact
 - `doctor`: run static package and file checks
 - `doctor --live-judge`: probe the configured judge endpoint with a structured request
 - `self-test`: run the deterministic synthetic regression suite
@@ -473,9 +483,9 @@ leaves unrelated hook configuration intact.
 
 - judge backend and env vars: `docs/runtime-contract.md`
 
-## Managed Hook Entries
+## Installed Hook Entries
 
-The managed template adds one handler under each of these events:
+The package template adds one handler under each of these events:
 
 - `SessionStart` with matcher `startup|resume`
 - `Stop`

@@ -10,22 +10,25 @@
 
 ## 무엇을 하나요
 
-이 패키지는 관리되는 Codex hook 두 개를 설치합니다.
+이 패키지는 Codex hook 두 개를 설치합니다.
 
-- 시작 또는 resume 시 chooser 정책을 불러오는 `SessionStart` hook
+- 시작 또는 resume 시 Codex 세션에 짧은 closeout 정책을 넣는
+  `SessionStart` hook
 - 마무리 응답을 정상 종료할지, 같은 턴에서 자동으로 이어갈지, 짧은 후속 chooser를 보여줄지 결정하는 `Stop` hook
 
 judge 모델은 최근 대화 맥락을 보고 `end` / `auto_continue` / `ask_user`
 모드를 고릅니다. `ask_user`가 필요하면 Codex가 실제 chooser 질문과 옵션을
 현재 세션 맥락에 맞게 생성합니다.
 
-이 hook들은 `~/.codex/hooks.json`에 additive 방식으로 병합되며,
-`uninstall`은 이 패키지가 관리하는 항목만 제거합니다.
+이 패키지가 추가하는 hook 항목들은 `~/.codex/hooks.json`에 additive
+방식으로 병합되며, `uninstall`은 이 패키지가 추가한 항목만 제거합니다.
 
 ## 동작 방식
 
-1. `SessionStart`가 startup 과 resume 시점에 실행되어 chooser policy를
-   Codex 세션에 로드합니다.
+1. `SessionStart`가 startup 과 resume 시점에 실행되어
+   `hookSpecificOutput.additionalContext`에 짧은 정책 문구를 넣습니다.
+   - clear next step이 하나이면 같은 턴에서 자동으로 이어서 진행하라고 알려줍니다
+   - 실제로 갈림길 선택이 필요할 때만 `request_user_input`를 쓰라고 알려줍니다
 2. 턴이 끝나기 직전에 `Stop` hook 이 실행됩니다.
 3. `Stop` hook 은 transcript에서 최근 turn 기록을 다시 구성합니다. 여기서
    `turn`은 `turn_id`를 기준으로 묶인 하나의 재구성된 대화 단위입니다.
@@ -36,7 +39,7 @@ judge 모델은 최근 대화 맥락을 보고 `end` / `auto_continue` / `ask_us
    summary를 만듭니다.
    - 최근 turn window: 최대 `6`개 turn
    - chooser history window: 최대 `6`개 chooser
-   - current-turn timeline window: 최대 `12`개 derived timeline item
+   - current-turn message-sequence window: 최대 `12`개 derived message item
      여기서 각 item은 ordered `entries` stream에서 다시 복원한 user 또는
      assistant message 하나를 뜻합니다
    - assistant message count, chooser count 같은 coarse turn-shape 카운트
@@ -90,9 +93,9 @@ Stop hook은 raw transcript 전체를 그대로 judge에 보내지 않습니다.
 현재 turn 요약은 대략 이런 순서로 만들어집니다.
 
 1. transcript에서 최근 turn들을 ordered `entries`로 다시 구성합니다
-2. 그 `entries`에서 현재 turn의 message timeline과 chooser history를 파생합니다
+2. 그 `entries`에서 현재 turn의 message sequence view와 chooser history를 파생합니다
 3. assistant message count, chooser count 같은 coarse turn-shape 카운트를 계산합니다
-4. 최신 user message 이후의 derived timeline을 current-turn 핵심 블록으로 유지합니다
+4. 최신 user message 이후의 derived message sequence를 current-turn 핵심 블록으로 유지합니다
 5. 최근 chooser history를 별도 블록으로 붙여서, 이미 무엇을 보여줬고 어떤 응답이 있었는지 judge가 볼 수 있게 합니다
 
 현재 raw turn shape는 대략 이렇습니다.
@@ -111,8 +114,13 @@ turn = {
 }
 ```
 
-이 ordered stream에서 judge가 보는 `last_user_message`,
-`recent_choosers`, `timeline_since_last_user`, 각종 count 필드를 다시 계산합니다.
+이제 raw `timeline` 필드는 없습니다. 이 ordered stream에서 judge가 보는
+`last_user_message`, `recent_choosers`, `timeline_since_last_user`,
+각종 count 필드를 다시 계산합니다.
+
+judge prompt 안에서는 여전히
+`<current_turn_timeline_since_last_user>`라는 블록 이름을 쓰지만, 이 값도
+이제 `entries`에서 파생한 view이지 raw stored field는 아닙니다.
 
 현재 prompt 형태는 대략 이렇습니다.
 
@@ -393,8 +401,8 @@ PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli install --json
 `install`이 하는 일:
 
 - 현재 Python 인터프리터 경로로 hook template를 렌더링합니다
-- 현재 repo root를 관리 대상 hook command에 반영합니다
-- 관리 대상 handler를 `~/.codex/hooks.json`에 병합합니다
+- 현재 repo root를 이 패키지가 추가하는 hook command에 반영합니다
+- 이 패키지가 추가하는 hook 항목을 `~/.codex/hooks.json`에 병합합니다
 - 파일이 바뀌면 쓰기 전에 backup을 만듭니다
 
 ## 검증
@@ -449,19 +457,19 @@ PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli observe --all-cwds --dat
 PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli uninstall --dry-run --json
 ```
 
-관리 대상 handler를 제거합니다.
+이 패키지가 추가한 hook 항목을 제거합니다.
 
 ```bash
 PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli uninstall --json
 ```
 
-`uninstall`은 이 패키지가 관리하는 항목만 제거하고, 관련 없는 hook 설정은
+`uninstall`은 이 패키지가 추가한 항목만 제거하고, 관련 없는 hook 설정은
 그대로 둡니다.
 
 ## CLI 명령
 
-- `install`: hook template를 렌더링하고 관리 대상 handler를 `hooks.json`에 병합
-- `uninstall`: 관련 없는 hook 설정은 유지한 채 관리 대상 항목만 제거
+- `install`: hook template를 렌더링하고 이 패키지의 hook 항목을 `hooks.json`에 병합
+- `uninstall`: 관련 없는 hook 설정은 유지한 채 이 패키지의 hook 항목만 제거
 - `doctor`: 정적 파일 및 패키지 상태 점검
 - `doctor --live-judge`: judge endpoint에 structured request를 보내 실제 응답 점검
 - `self-test`: deterministic synthetic regression suite 실행
@@ -472,9 +480,9 @@ PYTHONPATH=src python3 -m codex_click_chooser_hooks.cli uninstall --json
 
 - judge backend와 환경 변수: `docs/runtime-contract.md`
 
-## 관리되는 hook 항목
+## 설치되는 hook 항목
 
-관리되는 template는 아래 이벤트마다 handler 하나씩 추가합니다.
+이 패키지의 template는 아래 이벤트마다 handler 하나씩 추가합니다.
 
 - `SessionStart` with matcher `startup|resume`
 - `Stop`
