@@ -261,6 +261,19 @@ class TranscriptLoggingTests(unittest.TestCase):
             ),
             json.dumps(
                 {
+                    "type": "event_msg",
+                    "timestamp": "2026-04-21T10:00:01Z",
+                    "payload": {
+                        "type": "stop_hook_judgment",
+                        "turn_id": "turn-logging",
+                        "decision": "block",
+                        "status": "mode_auto_continue",
+                        "mode": "auto_continue",
+                    },
+                }
+            ),
+            json.dumps(
+                {
                     "type": "response_item",
                     "payload": {
                         "type": "message",
@@ -313,6 +326,146 @@ class TranscriptLoggingTests(unittest.TestCase):
         )
         self.assertEqual(event["payload"]["decision"], "block")
         self.assertEqual(event["payload"]["status"], "mode_end_summary_continuation")
+        self.assertEqual(event["payload"]["mode"], "end")
+        self.assertEqual(
+            event["payload"]["current_turn_context"]["stop_hook_judgments"],
+            [
+                {
+                    "status": "mode_auto_continue",
+                    "decision": "block",
+                    "mode": "auto_continue",
+                    "time": "10:00:01",
+                }
+            ],
+        )
+
+    def test_main_keeps_tiny_end_without_summary_continuation(self) -> None:
+        transcript_lines = [
+            json.dumps({"type": "turn_context", "payload": {"turn_id": "turn-logging"}}),
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": "Does the hook template still point at the packaged stop-hook script?",
+                            }
+                        ],
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "Confirmed. The hook template still points at the packaged stop-hook script.",
+                            }
+                        ],
+                    },
+                }
+            ),
+        ]
+
+        hook_output, event = self.run_main_with_judgment(
+            {
+                "mode": "end",
+                "continue_instruction": "",
+                "rationale": "This is a tiny verification answer with no surfaced follow-up lane.",
+            },
+            last_assistant_message=(
+                "Confirmed. The hook template still points at the packaged stop-hook script."
+            ),
+            stop_hook_active=False,
+            transcript_lines=transcript_lines,
+        )
+
+        self.assertEqual(hook_output, {"continue": True})
+        self.assertEqual(event["payload"]["decision"], "continue")
+        self.assertEqual(event["payload"]["status"], "mode_end")
+        self.assertEqual(event["payload"]["mode"], "end")
+
+    def test_main_does_not_repeat_end_summary_after_summary_continuation(self) -> None:
+        transcript_lines = [
+            json.dumps({"type": "turn_context", "payload": {"turn_id": "turn-logging"}}),
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "Go ahead and keep moving."}
+                        ],
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "event_msg",
+                    "timestamp": "2026-04-21T10:00:01Z",
+                    "payload": {
+                        "type": "stop_hook_judgment",
+                        "turn_id": "turn-logging",
+                        "decision": "block",
+                        "status": "mode_ask_user",
+                        "mode": "ask_user",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "event_msg",
+                    "timestamp": "2026-04-21T10:00:02Z",
+                    "payload": {
+                        "type": "stop_hook_judgment",
+                        "turn_id": "turn-logging",
+                        "decision": "block",
+                        "status": "mode_end_summary_continuation",
+                        "mode": "end",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "I already wrote the closing summary and there is nothing else to add.",
+                            }
+                        ],
+                    },
+                }
+            ),
+        ]
+
+        hook_output, event = self.run_main_with_judgment(
+            {
+                "mode": "end",
+                "continue_instruction": "",
+                "rationale": "The summary pass already happened, so the turn can close now.",
+            },
+            last_assistant_message=(
+                "I already wrote the closing summary and there is nothing else to add."
+            ),
+            stop_hook_active=True,
+            transcript_lines=transcript_lines,
+        )
+
+        self.assertEqual(hook_output, {"continue": True})
+        self.assertEqual(event["payload"]["decision"], "continue")
+        self.assertEqual(event["payload"]["status"], "mode_end")
         self.assertEqual(event["payload"]["mode"], "end")
 
     def test_read_recent_session_context_uses_entries_stream(self) -> None:
@@ -448,6 +601,7 @@ class TranscriptLoggingTests(unittest.TestCase):
             "Please expand the README explanation.",
         )
         self.assertEqual(context["current_turn_requests"][0]["question"], "How should we proceed?")
+        self.assertEqual(context["current_turn_context"]["stop_hook_judgments"], [])
 
     def test_main_logs_judge_unavailable_failure_reason(self) -> None:
         hook_output, event = self.run_main_with_judgment(

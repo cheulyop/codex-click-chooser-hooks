@@ -41,6 +41,9 @@ package.
    - `auto_continue`: Codex receives a continue instruction and keeps moving
    - `ask_user`: Codex generates the actual `request_user_input` question and
      options from the live session context
+   - if a later `end` happens in the same turn after an earlier Stop-hook
+     continuation, the hook may insert one final closing-summary continuation
+     before the turn actually finishes
 6. The hook appends a `stop_hook_judgment` debug event to the transcript so
    you can inspect what happened later with `observe`.
 
@@ -201,6 +204,16 @@ instructions or lets the turn end:
 - `build_ask_user_block_reason(...)` tells Codex to call
   `request_user_input` and generate the next-step question from session context
 - `end` does not produce a follow-up block reason; the turn simply closes
+
+There is one special `end` case:
+
+- if the same turn previously had a Stop-hook continuation with
+  `ask_user` or `auto_continue`, and no closing-summary continuation has run
+  yet, a final `end` is turned into one short summary pass before the turn
+  actually closes
+- that summary pass happens at most once per turn
+- if the turn never had a prior Stop-hook continuation, `end` just ends
+  normally
 
 There is also one safety layer after the judge:
 

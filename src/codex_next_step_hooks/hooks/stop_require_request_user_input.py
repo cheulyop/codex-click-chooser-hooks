@@ -33,6 +33,13 @@ RECENT_QUESTIONS_LIMIT = 6
 CURRENT_TURN_MESSAGES_LIMIT = 3
 CURRENT_TURN_TIMELINE_LIMIT = 12
 MAX_CONTEXT_TEXT_CHARS = 240
+SUMMARY_TRIGGER_STOP_STATUSES = {
+    "mode_auto_continue",
+    "mode_auto_continue_end_override",
+    "mode_ask_user",
+    "mode_ask_user_end_override",
+}
+END_SUMMARY_CONTINUATION_STATUS = "mode_end_summary_continuation"
 
 # These helpers support lightweight same-lane filtering for recent
 # request_user_input history. We classify obvious user-side context blobs
@@ -448,6 +455,23 @@ def request_entries_from_turn(turn: Dict[str, Any]) -> List[Dict[str, Any]]:
     return collected
 
 
+def stop_hook_judgment_entries_from_turn(turn: Dict[str, Any]) -> List[Dict[str, Any]]:
+    collected: List[Dict[str, Any]] = []
+    for entry in turn.get("entries", []):
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("kind") != "stop_hook_judgment":
+            continue
+        judgment_entry: Dict[str, Any] = {}
+        for field in ("decision", "status", "mode", "turn_id", "timestamp"):
+            value = entry.get(field)
+            if value is not None:
+                judgment_entry[field] = value
+        if judgment_entry:
+            collected.append(judgment_entry)
+    return collected
+
+
 def timeline_entries_from_turn(turn: Dict[str, Any]) -> List[Dict[str, Any]]:
     timeline: List[Dict[str, Any]] = []
     for entry in turn.get("entries", []):
@@ -517,6 +541,7 @@ def request_anchor_metadata_for_turn(turn: Dict[str, Any]) -> Dict[str, Any]:
 
 def summarize_current_turn(turn: Dict[str, Any]) -> Dict[str, Any]:
     timeline = timeline_entries_from_turn(turn)
+    stop_hook_judgments = stop_hook_judgment_entries_from_turn(turn)
     substantive_user_messages = [
         item
         for item in timeline
@@ -598,6 +623,7 @@ def summarize_current_turn(turn: Dict[str, Any]) -> Dict[str, Any]:
         ],
         "recent_timeline": recent_timeline,
         "timeline_since_last_user": timeline_since_last_user,
+        "stop_hook_judgments": stop_hook_judgments,
     }
 
 
@@ -706,6 +732,19 @@ def read_recent_session_context(
                     append_turn_message(
                         current_turn, "user", message, item.get("timestamp")
                     )
+                continue
+
+            if item_type == "event_msg" and payload.get("type") == "stop_hook_judgment":
+                current_turn.setdefault("entries", []).append(
+                    {
+                        "kind": "stop_hook_judgment",
+                        "turn_id": payload.get("turn_id"),
+                        "decision": payload.get("decision"),
+                        "status": payload.get("status"),
+                        "mode": payload.get("mode"),
+                        "timestamp": item.get("timestamp"),
+                    }
+                )
                 continue
 
             if item_type != "response_item":
@@ -1279,6 +1318,30 @@ def build_debug_current_turn_context(payload: Dict[str, Any]) -> Dict[str, Any]:
     if timeline_since_last_user:
         summary["timeline_since_last_user"] = timeline_since_last_user
 
+    stop_hook_judgments = context.get("stop_hook_judgments")
+    if isinstance(stop_hook_judgments, list) and stop_hook_judgments:
+        summarized_judgments = []
+        for item in stop_hook_judgments:
+            if not isinstance(item, dict):
+                continue
+            judgment_summary: Dict[str, Any] = {}
+            status = item.get("status")
+            if isinstance(status, str) and status:
+                judgment_summary["status"] = status
+            decision = item.get("decision")
+            if isinstance(decision, str) and decision:
+                judgment_summary["decision"] = decision
+            mode = item.get("mode")
+            if isinstance(mode, str) and mode:
+                judgment_summary["mode"] = mode
+            time_text = compact_timestamp(item.get("timestamp"))
+            if time_text:
+                judgment_summary["time"] = time_text
+            if judgment_summary:
+                summarized_judgments.append(judgment_summary)
+        if summarized_judgments:
+            summary["stop_hook_judgments"] = summarized_judgments
+
     return summary
 
 
@@ -1327,9 +1390,6 @@ def build_end_summary_block_reason(payload: Dict[str, Any]) -> str:
 
 
 def should_request_end_summary_pass(payload: Dict[str, Any]) -> bool:
-    if payload.get("stop_hook_active"):
-        return False
-
     context = payload.get("_current_turn_context")
     if not isinstance(context, dict) or not context:
         return False
@@ -1338,11 +1398,26 @@ def should_request_end_summary_pass(payload: Dict[str, Any]) -> bool:
     if not isinstance(anchor_message, str) or not anchor_message.strip():
         return False
 
-    assistant_messages = context.get("assistant_messages_since_last_user_texts")
-    if not isinstance(assistant_messages, list):
+    stop_hook_judgments = context.get("stop_hook_judgments")
+    if not isinstance(stop_hook_judgments, list) or not stop_hook_judgments:
         return False
 
-    return any(isinstance(message, str) and message.strip() for message in assistant_messages)
+    has_prior_stop_continuation = False
+    already_ran_end_summary = False
+    for entry in stop_hook_judgments:
+        if not isinstance(entry, dict):
+            continue
+        status = entry.get("status")
+        decision = entry.get("decision")
+        if status == END_SUMMARY_CONTINUATION_STATUS:
+            already_ran_end_summary = True
+        if decision == "block" and status in SUMMARY_TRIGGER_STOP_STATUSES:
+            has_prior_stop_continuation = True
+
+    if already_ran_end_summary:
+        return False
+
+    return has_prior_stop_continuation
 
 
 def build_stop_hook_debug_payload(
