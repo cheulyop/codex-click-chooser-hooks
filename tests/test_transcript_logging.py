@@ -468,6 +468,232 @@ class TranscriptLoggingTests(unittest.TestCase):
         self.assertEqual(event["payload"]["status"], "mode_end")
         self.assertEqual(event["payload"]["mode"], "end")
 
+    def test_main_turns_explicit_stop_into_one_safe_summary_continuation(self) -> None:
+        transcript_lines = [
+            json.dumps({"type": "turn_context", "payload": {"turn_id": "turn-logging"}}),
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "Go ahead and keep moving."}
+                        ],
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "event_msg",
+                    "timestamp": "2026-04-21T10:00:01Z",
+                    "payload": {
+                        "type": "stop_hook_judgment",
+                        "turn_id": "turn-logging",
+                        "decision": "block",
+                        "status": "mode_ask_user",
+                        "mode": "ask_user",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "request_user_input",
+                        "call_id": "call-1",
+                        "arguments": json.dumps(
+                            {
+                                "questions": [
+                                    {
+                                        "header": "Wrap Up",
+                                        "question": "What should we do next?",
+                                        "options": [
+                                            {
+                                                "label": "Show exact files",
+                                                "description": "List the changed files.",
+                                            },
+                                            {
+                                                "label": "Finish here",
+                                                "description": "Stop now.",
+                                            },
+                                        ],
+                                    }
+                                ]
+                            }
+                        ),
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "call-1",
+                        "output": json.dumps(
+                            {"answers": {"wrap_up": {"answers": ["Finish here"]}}}
+                        ),
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "Everything is installed and verified.",
+                            }
+                        ],
+                    },
+                }
+            ),
+        ]
+
+        hook_output, event = self.run_main_with_judgment(
+            {
+                "mode": "end",
+                "continue_instruction": "",
+                "rationale": "The user asked to finish here.",
+            },
+            last_assistant_message="Everything is installed and verified.",
+            stop_hook_active=True,
+            transcript_lines=transcript_lines,
+        )
+
+        self.assertEqual(hook_output["decision"], "block")
+        self.assertIn("Before ending, write a closing summary", hook_output["reason"])
+        self.assertEqual(event["payload"]["decision"], "block")
+        self.assertEqual(
+            event["payload"]["status"],
+            "explicit_stop_end_summary_continuation",
+        )
+        self.assertEqual(event["payload"]["mode"], "end")
+        self.assertEqual(
+            event["payload"]["judgment_override"]["reason"],
+            "explicit_stop_requires_closing_summary_pass",
+        )
+
+    def test_main_does_not_repeat_explicit_stop_summary_continuation(self) -> None:
+        transcript_lines = [
+            json.dumps({"type": "turn_context", "payload": {"turn_id": "turn-logging"}}),
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "Go ahead and keep moving."}
+                        ],
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "event_msg",
+                    "timestamp": "2026-04-21T10:00:01Z",
+                    "payload": {
+                        "type": "stop_hook_judgment",
+                        "turn_id": "turn-logging",
+                        "decision": "block",
+                        "status": "mode_ask_user",
+                        "mode": "ask_user",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "request_user_input",
+                        "call_id": "call-1",
+                        "arguments": json.dumps(
+                            {
+                                "questions": [
+                                    {
+                                        "header": "Wrap Up",
+                                        "question": "What should we do next?",
+                                        "options": [
+                                            {
+                                                "label": "Show exact files",
+                                                "description": "List the changed files.",
+                                            },
+                                            {
+                                                "label": "Finish here",
+                                                "description": "Stop now.",
+                                            },
+                                        ],
+                                    }
+                                ]
+                            }
+                        ),
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "call-1",
+                        "output": json.dumps(
+                            {"answers": {"wrap_up": {"answers": ["Finish here"]}}}
+                        ),
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "event_msg",
+                    "timestamp": "2026-04-21T10:00:02Z",
+                    "payload": {
+                        "type": "stop_hook_judgment",
+                        "turn_id": "turn-logging",
+                        "decision": "block",
+                        "status": "explicit_stop_end_summary_continuation",
+                        "mode": "end",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "Closing summary already written.",
+                            }
+                        ],
+                    },
+                }
+            ),
+        ]
+
+        hook_output, event = self.run_main_with_judgment(
+            {
+                "mode": "end",
+                "continue_instruction": "",
+                "rationale": "The turn can now finish.",
+            },
+            last_assistant_message="Closing summary already written.",
+            stop_hook_active=True,
+            transcript_lines=transcript_lines,
+        )
+
+        self.assertEqual(hook_output, {"continue": True})
+        self.assertEqual(event["payload"]["decision"], "continue")
+        self.assertEqual(event["payload"]["status"], "explicit_stop_already_selected")
+
     def test_read_recent_session_context_uses_entries_stream(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             transcript_path = Path(temp_dir) / "transcript.jsonl"

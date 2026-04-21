@@ -40,6 +40,13 @@ SUMMARY_TRIGGER_STOP_STATUSES = {
     "mode_ask_user_end_override",
 }
 END_SUMMARY_CONTINUATION_STATUS = "mode_end_summary_continuation"
+EXPLICIT_STOP_END_SUMMARY_CONTINUATION_STATUS = (
+    "explicit_stop_end_summary_continuation"
+)
+END_SUMMARY_COMPLETION_STATUSES = {
+    END_SUMMARY_CONTINUATION_STATUS,
+    EXPLICIT_STOP_END_SUMMARY_CONTINUATION_STATUS,
+}
 
 # These helpers support lightweight same-lane filtering for recent
 # request_user_input history. We classify obvious user-side context blobs
@@ -1409,7 +1416,7 @@ def should_request_end_summary_pass(payload: Dict[str, Any]) -> bool:
             continue
         status = entry.get("status")
         decision = entry.get("decision")
-        if status == END_SUMMARY_CONTINUATION_STATUS:
+        if status in END_SUMMARY_COMPLETION_STATUSES:
             already_ran_end_summary = True
         if decision == "block" and status in SUMMARY_TRIGGER_STOP_STATUSES:
             has_prior_stop_continuation = True
@@ -1631,6 +1638,33 @@ def should_continue(payload: Dict[str, Any]) -> bool:
     if current_turn_context:
         payload["_current_turn_context"] = current_turn_context
     if latest_answer_is_explicit_stop(current_turn_requests):
+        if should_request_end_summary_pass(payload):
+            payload["_custom_block_reason"] = build_end_summary_block_reason(payload)
+            payload["_stop_hook_debug"] = build_stop_hook_debug_payload(
+                payload,
+                decision="block",
+                status=EXPLICIT_STOP_END_SUMMARY_CONTINUATION_STATUS,
+                judgment={
+                    "mode": "end",
+                    "continue_instruction": "",
+                    "rationale": (
+                        "The user explicitly chose to finish here, but this turn already "
+                        "had a stop-hook continuation, so one final closing summary should "
+                        "run before the turn ends."
+                    ),
+                },
+                raw_judgment={
+                    "mode": "end",
+                    "continue_instruction": "",
+                    "rationale": "explicit_stop_selected",
+                },
+                judgment_override={
+                    "from_mode": "end",
+                    "to_mode": "end",
+                    "reason": "explicit_stop_requires_closing_summary_pass",
+                },
+            )
+            return False
         payload["_stop_hook_debug"] = build_stop_hook_debug_payload(
             payload,
             decision="continue",
